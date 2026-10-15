@@ -79,12 +79,14 @@ impl Model {
                         start: TokenIndex(s),
                         end: TokenIndex(i + 1),
                         label: l,
+                        id: None,
                     })
                 }
                 ActionKind::Unit => ents.push(Span {
                     start: TokenIndex(i),
                     end: TokenIndex(i + 1),
                     label: label.into(),
+                    id: None,
                 }),
                 _ => {}
             }

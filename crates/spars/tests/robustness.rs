@@ -268,11 +268,111 @@ fn malformed_snapshots_reject_unicode_offsets_indices_and_spans() {
         );
     }
     let mut unsupported = valid.clone();
-    unsupported["format_version"] = json!(3);
+    unsupported["format_version"] = json!(4);
     assert!(matches!(
         Doc::from_json(&unsupported.to_string()),
         Err(Error::Unsupported(_))
     ));
+    // Entity IDs need format v3, so an older reader rejects them instead of dropping them.
+    let mut ids = valid.clone();
+    ids["document"]["tokens"][0]["entity_id"] = json!("q1");
+    ids["document"]["entities"] = json!([{"start": 0, "end": 1, "label": "X", "id": "q1"}]);
+    // Either kind of ID alone needs v3.
+    let mut token_only = ids.clone();
+    token_only["document"]["entities"] = json!([]);
+    let mut entity_only = ids.clone();
+    entity_only["document"]["tokens"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("entity_id");
+    for snapshot in [&mut ids, &mut token_only, &mut entity_only] {
+        for version in [1, 2] {
+            snapshot["format_version"] = json!(version);
+            assert!(
+                matches!(
+                    Doc::from_json(&snapshot.to_string()),
+                    Err(Error::Unsupported(_))
+                ),
+                "accepted IDs in v{version}: {snapshot}"
+            );
+        }
+    }
+    ids["format_version"] = json!(3);
+    let restored = Doc::from_json(&ids.to_string()).unwrap();
+    assert_eq!(restored.tokens()[0].entity_id.as_deref(), Some("q1"));
+    assert_eq!(restored.entities().unwrap()[0].id.as_deref(), Some("q1"));
+    // Writing uses v3 only when IDs are present; the valid snapshot without them stays v1.
+    let written: serde_json::Value = serde_json::from_str(&restored.to_json().unwrap()).unwrap();
+    assert_eq!(written["format_version"], json!(3));
+    let plain: serde_json::Value = serde_json::from_str(
+        &Doc::from_json(&valid.to_string())
+            .unwrap()
+            .to_json()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(plain["format_version"], json!(1));
+    assert_eq!(
+        Doc::from_json(&restored.to_json().unwrap()).unwrap(),
+        restored
+    );
+    for (pointer, replacement) in [
+        ("/document/tokens/0/entity_id", json!("")),
+        ("/document/entities/0/id", json!("")),
+    ] {
+        let mut invalid = ids.clone();
+        *invalid.pointer_mut(pointer).unwrap() = replacement;
+        assert!(
+            matches!(Doc::from_json(&invalid.to_string()), Err(Error::Model(_))),
+            "accepted {pointer}"
+        );
+    }
+    for (field, label) in [("sentences", ""), ("noun_chunks", "NP")] {
+        let mut invalid = ids.clone();
+        invalid["document"][field] = json!([{"start": 0, "end": 1, "label": label, "id": "q1"}]);
+        assert!(
+            matches!(Doc::from_json(&invalid.to_string()), Err(Error::Model(_))),
+            "accepted {field} id"
+        );
+    }
+    // spaCy reads an entity's ID from its first token, so a snapshot cannot disagree with it.
+    let mut other_id = ids.clone();
+    other_id["document"]["entities"][0]["id"] = json!("q2");
+    let mut missing_entity_id = ids.clone();
+    missing_entity_id["document"]["entities"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("id");
+    entity_only["format_version"] = json!(3);
+    for invalid in [other_id, missing_entity_id, entity_only] {
+        assert!(
+            matches!(Doc::from_json(&invalid.to_string()), Err(Error::Model(_))),
+            "accepted mismatched IDs: {invalid}"
+        );
+    }
+    // A token ID alone is valid v3: a token keeps its ID after leaving an entity.
+    token_only["format_version"] = json!(3);
+    assert!(Doc::from_json(&token_only.to_string()).is_ok());
+    // v3 also carries contextual vectors, validated as in v2, and a document with both is
+    // written as v3.
+    let mut tensor = ids.clone();
+    let rows = tensor["document"]["tokens"].as_array().unwrap().len();
+    tensor["document"]["tensor"] = json!(vec![vec![0.5_f32, 1.5]; rows]);
+    let with_tensor = Doc::from_json(&tensor.to_string()).unwrap();
+    let written: serde_json::Value = serde_json::from_str(&with_tensor.to_json().unwrap()).unwrap();
+    assert_eq!(written["format_version"], json!(3));
+    assert_eq!(
+        Doc::from_json(&with_tensor.to_json().unwrap()).unwrap(),
+        with_tensor
+    );
+    for row in [json!([0.5]), json!([0.5, f64::MAX]), json!([])] {
+        let mut invalid = tensor.clone();
+        invalid["document"]["tensor"][0] = row;
+        assert!(
+            matches!(Doc::from_json(&invalid.to_string()), Err(Error::Model(_))),
+            "accepted v3 tensor {invalid}"
+        );
+    }
     assert!(matches!(Doc::from_json("{"), Err(Error::Json(_))));
     let mut wrong_type = valid;
     wrong_type["document"]["tokens"][0]["start"] = json!("zero");

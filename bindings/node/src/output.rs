@@ -7,9 +7,9 @@ pub struct Document {
     pub tokens: Vec<Token>,
     #[napi(ts_type = "Array<Span<EntityLabel>>")]
     pub entities: Option<Vec<Span>>,
-    #[napi(ts_type = "Array<Span<''>>")]
+    #[napi(ts_type = "Array<Span<'', ''>>")]
     pub sentences: Option<Vec<Span>>,
-    #[napi(ts_type = "Array<Span<'NP'>>")]
+    #[napi(ts_type = "Array<Span<'NP', ''>>")]
     pub noun_chunks: Option<Vec<Span>>,
 }
 
@@ -49,6 +49,9 @@ pub struct Token {
     pub entity_iob: Option<String>,
     #[napi(ts_type = "EntityLabel | ''")]
     pub entity_type: Option<String>,
+    /// spaCy's `Token.ent_id_`, or `''` without one. A token keeps its ID when it stops being
+    /// part of an entity, as in spaCy.
+    pub entity_id: String,
 }
 
 /// A half-open token interval: start is included; end is excluded.
@@ -59,4 +62,6 @@ pub struct Span {
     #[napi(ts_type = "import('./units.js').TokenIndex")]
     pub end: u32,
     pub label: String,
+    /// spaCy's `Span.id_`, or `''` without one; only entities carry IDs.
+    pub id: String,
 }

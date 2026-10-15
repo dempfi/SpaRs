@@ -22,7 +22,12 @@ fn compile(constraints: &[TokenConstraint]) -> Result<Compiled> {
 use crate::{Token, TokenIndex};
 
 fn doc() -> Doc {
-    let mut token = Token::new(0, 1, 0, "x".into());
+    let mut token = Token::new(
+        crate::ByteOffset(0),
+        crate::ByteOffset(1),
+        crate::CodePointOffset(0),
+        "x".into(),
+    );
     token.morphology = Some("Case=Acc,Nom|Number=Sing".into());
     Doc {
         text: "x".into(),
@@ -159,8 +164,18 @@ fn lower_needs_no_annotations_and_compares_pattern_values_as_written() {
     let doc = Doc {
         text: text.into(),
         tokens: vec![
-            Token::new(0, 4, 0, "ΟΣ".into()),
-            Token::new(5, 8, 3, "The".into()),
+            Token::new(
+                crate::ByteOffset(0),
+                crate::ByteOffset(4),
+                crate::CodePointOffset(0),
+                "ΟΣ".into(),
+            ),
+            Token::new(
+                crate::ByteOffset(5),
+                crate::ByteOffset(8),
+                crate::CodePointOffset(3),
+                "The".into(),
+            ),
         ],
         entities: None,
         sentences: None,
@@ -275,8 +290,18 @@ fn lower_set_values_are_not_lowercased_and_cache_is_filled_only_when_needed() {
     let doc = Doc {
         text: "ΟΣ The".into(),
         tokens: vec![
-            Token::new(0, 4, 0, "ΟΣ".into()),
-            Token::new(5, 8, 3, "The".into()),
+            Token::new(
+                crate::ByteOffset(0),
+                crate::ByteOffset(4),
+                crate::CodePointOffset(0),
+                "ΟΣ".into(),
+            ),
+            Token::new(
+                crate::ByteOffset(5),
+                crate::ByteOffset(8),
+                crate::CodePointOffset(3),
+                "The".into(),
+            ),
         ],
         entities: None,
         sentences: None,
@@ -460,7 +485,12 @@ fn length_counts_code_points_and_compares_like_spacy() {
     let mut tokens = Vec::new();
     let (mut start, mut idx) = (0, 0);
     for word in words {
-        tokens.push(Token::new(start, start + word.len(), idx, word.into()));
+        tokens.push(Token::new(
+            crate::ByteOffset(start),
+            crate::ByteOffset(start + word.len()),
+            crate::CodePointOffset(idx),
+            word.into(),
+        ));
         start += word.len() + 1;
         idx += word.chars().count() + 1;
     }

@@ -70,7 +70,10 @@ function documentFor(c: Case): NativeDocument {
 
 function observed(doc: NativeDocument): State {
   const output = doc.toObject();
-  return { error: null, tokens: output.tokens.map(t => ({ iob: t.entityIob, type: t.entityType })), entities: output.entities };
+  // entity-updates-v1 predates entity IDs and sets none; entity-ids.test.mts covers them.
+  assert.ok(output.tokens.every(t => t.entityId === ''));
+  const entities = output.entities && output.entities.map(({ id, ...entity }) => { assert.equal(id, ''); return entity; });
+  return { error: null, tokens: output.tokens.map(t => ({ iob: t.entityIob, type: t.entityType })), entities };
 }
 
 let model: Model;
@@ -108,7 +111,7 @@ test('withEntities returns a copy and leaves the document and its views unchange
   assert.equal(doc.toSnapshot(), before);
   assert.equal(token.annotations().entityType, 'GPE');
   assert.equal(span.text, 'Tim Cook');
-  assert.deepEqual(edited.toObject().entities, [{ start: 0, end: 2, label: 'PERSON' }, { start: 3, end: 4, label: 'CITY' }]);
+  assert.deepEqual(edited.toObject().entities, [{ start: 0, end: 2, label: 'PERSON', id: '' }, { start: 3, end: 4, label: 'CITY', id: '' }]);
   assert.equal(edited.token(3).annotations().entityType, 'CITY');
   // Everything except entity annotation is preserved, including contextual vectors.
   const strip = (json: string): unknown => {

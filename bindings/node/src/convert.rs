@@ -37,6 +37,7 @@ pub fn document(doc: &spars::Doc) -> Result<Document> {
             sentence_start: token.sentence_start,
             entity_iob: token.entity_iob.clone(),
             entity_type: token.entity_type.clone(),
+            entity_id: token.entity_id.clone().unwrap_or_default(),
         });
         utf16_cursor += units;
         byte_cursor = token.end.0;
@@ -60,6 +61,7 @@ fn spans(spans: Option<&[spars::Span]>) -> Result<Option<Vec<Span>>> {
                         start: number(span.start.0)?,
                         end: number(span.end.0)?,
                         label: span.label.clone(),
+                        id: span.id.clone().unwrap_or_default(),
                     })
                 })
                 .collect()

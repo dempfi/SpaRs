@@ -1,5 +1,5 @@
 use crate::config::{Exception, TokenizerConfig};
-use crate::{Doc, Model, Result, Token};
+use crate::{ByteOffset, CodePointOffset, Doc, Model, Result, Token};
 use fancy_regex::Regex;
 use std::collections::HashMap;
 pub(crate) struct Tokenizer {
@@ -227,7 +227,12 @@ impl Model {
         let mut prev = 0;
         for (a, b, norm) in replaced {
             cp += text[prev..a].chars().count();
-            let mut t = Token::new(a, b, cp, norm.unwrap_or_else(|| self.norm(&text[a..b])));
+            let mut t = Token::new(
+                ByteOffset(a),
+                ByteOffset(b),
+                CodePointOffset(cp),
+                norm.unwrap_or_else(|| self.norm(&text[a..b])),
+            );
             t.whitespace = text.as_bytes().get(b) == Some(&b' ');
             tokens.push(t);
             prev = a;

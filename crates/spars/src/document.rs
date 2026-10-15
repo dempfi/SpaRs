@@ -11,29 +11,64 @@ pub struct ByteOffset(pub usize);
 pub struct CodePointOffset(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenIndex(pub usize);
+/// One token of a [`Doc`] with its annotations, read through [`Doc::tokens`].
+///
+/// Code outside this crate cannot build a `Token` with a struct literal; call [`Token::new`] and
+/// then assign the public fields. A token built this way is only useful in a native snapshot
+/// passed to [`Doc::from_json`], which validates it. An `Option` annotation is `None` when no
+/// pipeline component produced it.
+// TODO(interned-strings): string annotations are owned per token. Store them once in a shared
+// string table and read them through methods. See docs/PROGRESS.md#interned-token-strings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Token {
+    /// Byte offset of the token's first byte in [`Doc::text`].
     pub start: ByteOffset,
+    /// Byte offset just past the token's last byte (exclusive).
     pub end: ByteOffset,
+    /// Code-point offset of `start`, spaCy's `Token.idx`.
     pub idx: CodePointOffset,
+    /// Whether one ASCII space follows the token.
     pub whitespace: bool,
+    /// spaCy's `Token.norm_`, the normalized form the tokenizer assigns.
     pub norm: String,
+    /// spaCy's `Token.tag_`; `None` when the pipeline has no tagger.
     pub tag: Option<String>,
+    /// spaCy's `Token.pos_`, a Universal POS tag or `""`; snapshots reject other values.
     pub pos: Option<String>,
+    /// Morphological features in spaCy's `Feat=Value|...` form.
     pub morphology: Option<String>,
+    /// spaCy's `Token.lemma_`; `None` when the pipeline has no lemmatizer.
     pub lemma: Option<String>,
+    /// Index of the syntactic head; the root of a sentence is its own head. `None` when the
+    /// document is unparsed.
     pub head: Option<TokenIndex>,
+    /// spaCy's `Token.dep_`; `None` when the document is unparsed.
     pub dep: Option<String>,
+    /// Whether the token starts a sentence; `None` when boundaries are unknown.
     pub sentence_start: Option<bool>,
+    /// Entity IOB tag: `"B"`, `"I"`, `"O"`, or `None` when unknown. `"B"` without an entity type
+    /// marks a token that can never be part of an entity.
     pub entity_iob: Option<String>,
+    /// Label of the entity the token belongs to; `None` or empty outside an entity.
     pub entity_type: Option<String>,
+    /// spaCy's `Token.ent_id_`, with `None` for the empty ID. It is independent of the IOB tag:
+    /// like spaCy, a token keeps its ID when it stops being part of an entity. Only
+    /// [`Doc::set_entities`] and [`Doc::with_entities`] set it; the named-entity recognizer never
+    /// does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity_id: Option<String>,
 }
 impl Token {
-    pub(crate) fn new(start: usize, end: usize, idx: usize, norm: String) -> Self {
+    /// A token for document text bytes `start..end` (end exclusive), where `idx` is the
+    /// code-point offset of `start` and `norm` its normalized form. `whitespace` starts `false`
+    /// and every `Option` annotation starts `None`. Nothing is validated until
+    /// [`Doc::from_json`].
+    pub fn new(start: ByteOffset, end: ByteOffset, idx: CodePointOffset, norm: String) -> Self {
         Self {
-            start: ByteOffset(start),
-            end: ByteOffset(end),
-            idx: CodePointOffset(idx),
+            start,
+            end,
+            idx,
             whitespace: false,
             norm,
             tag: None,
@@ -45,14 +80,39 @@ impl Token {
             sentence_start: None,
             entity_iob: None,
             entity_type: None,
+            entity_id: None,
         }
     }
 }
+/// A half-open token range `start..end` with a label. In a [`Doc`] it is an entity, a sentence
+/// (empty label) or a noun chunk (`"NP"`). Code outside this crate cannot build a `Span` with a
+/// struct literal; build one for [`EntityUpdate::entities`] with [`Span::new`], then assign public
+/// fields such as `id`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Span {
     pub start: TokenIndex,
     pub end: TokenIndex,
     pub label: String,
+    /// spaCy's `Span.id_`. In a [`Doc`], `None` means no ID, an entity's ID is its first token's
+    /// [`Token::entity_id`], and sentences and noun chunks never have one. In an
+    /// [`EntityUpdate`], `None` or an empty ID leaves each token's current ID in place rather than
+    /// clearing it, so the resulting entity can still report an earlier ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+}
+impl Span {
+    /// A span over tokens `start..end` (end exclusive) without an ID. Set `id` afterwards to give
+    /// an entity an ID. Bounds are checked when the span is used, for example by
+    /// [`Doc::set_entities`].
+    pub fn new(start: TokenIndex, end: TokenIndex, label: impl Into<String>) -> Self {
+        Self {
+            start,
+            end,
+            label: label.into(),
+            id: None,
+        }
+    }
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct Doc {
@@ -97,7 +157,7 @@ impl Doc {
                 spans.capacity() * std::mem::size_of::<Span>()
                     + spans
                         .iter()
-                        .map(|span| span.label.capacity())
+                        .map(|span| span.label.capacity() + string(&span.id))
                         .sum::<usize>()
             })
         }
@@ -115,6 +175,7 @@ impl Doc {
                             &token.dep,
                             &token.entity_iob,
                             &token.entity_type,
+                            &token.entity_id,
                         ]
                         .into_iter()
                         .map(string)
@@ -136,6 +197,11 @@ impl Doc {
     }
     pub fn tokens(&self) -> &[Token] {
         &self.tokens
+    }
+    /// Whether any token or entity carries an entity ID, which needs snapshot format v3.
+    fn has_entity_ids(&self) -> bool {
+        self.tokens.iter().any(|t| t.entity_id.is_some())
+            || self.entities.iter().flatten().any(|e| e.id.is_some())
     }
     pub fn token_text(&self, i: TokenIndex) -> Result<&str> {
         let t = self.tokens.get(i.0).ok_or(Error::Bounds)?;
@@ -182,7 +248,7 @@ pub(crate) const UNIVERSAL_POS: [&str; 20] = [
     "PRON", "PROPN", "PUNCT", "SCONJ", "SPACE", "SYM", "VERB", "X",
 ];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum SpanKind {
     Entity,
     Sentence,
@@ -192,8 +258,17 @@ enum SpanKind {
 impl Doc {
     /// Serialize an immutable document snapshot, preserving unavailable annotations.
     pub fn to_json(&self) -> Result<String> {
+        // Each version adds a field older readers would otherwise ignore: v2 contextual vectors,
+        // v3 entity IDs. A snapshot uses the oldest version that holds its data.
+        let version = if self.has_entity_ids() {
+            3
+        } else if !self.tensor.is_empty() {
+            2
+        } else {
+            1
+        };
         Ok(serde_json::to_string(
-            &serde_json::json!({"format_version":if self.tensor.is_empty() { 1 } else { 2 },"document":self}),
+            &serde_json::json!({"format_version": version, "document": self}),
         )?)
     }
     /// Restore a snapshot after validating offsets, token indices and spans.
@@ -214,7 +289,7 @@ impl Doc {
             tensor: Vec<Vec<f32>>,
         }
         let s: Snapshot = serde_json::from_str(json)?;
-        if ![1, 2].contains(&s.format_version) {
+        if ![1, 2, 3].contains(&s.format_version) {
             return Err(Error::Unsupported("document format version".into()));
         }
         if s.format_version == 1 && !s.document.tensor.is_empty() {
@@ -222,7 +297,20 @@ impl Doc {
                 "contextual vectors require document format v2".into(),
             ));
         }
+        let version = s.format_version;
         let s = s.document;
+        // Entity IDs need format v3, so a reader that predates them cannot silently drop them.
+        let check_id = |id: &Option<String>| -> Result<()> {
+            match id.as_deref() {
+                Some(_) if version < 3 => Err(Error::Unsupported(
+                    "entity IDs require document format v3".into(),
+                )),
+                Some("") => Err(Error::Model(
+                    "snapshot entity IDs must be omitted rather than empty".into(),
+                )),
+                _ => Ok(()),
+            }
+        };
         if !s.tensor.is_empty() {
             let width = s.tensor[0].len();
             if s.tensor.len() != s.tokens.len()
@@ -236,6 +324,7 @@ impl Doc {
             }
         }
         for t in &s.tokens {
+            check_id(&t.entity_id)?;
             // Closed value sets, as spaCy stores them; `""` is spaCy's unset value.
             if t.entity_iob
                 .as_deref()
@@ -311,6 +400,19 @@ impl Doc {
                 if !valid {
                     return Err(Error::Model(
                         "snapshot entities need a label, sentences none and noun chunks NP".into(),
+                    ));
+                }
+                check_id(&span.id)?;
+                // spaCy reads an entity's ID from its first token, so the two must agree; bounds
+                // were checked above.
+                let first = &s.tokens[span.start.0].entity_id;
+                let consistent = match kind {
+                    SpanKind::Entity => span.id == *first,
+                    SpanKind::Sentence | SpanKind::NounChunk => span.id.is_none(),
+                };
+                if !consistent {
+                    return Err(Error::Model(
+                        "snapshot entity IDs must match their first token's, and sentences and noun chunks have none".into(),
                     ));
                 }
             }

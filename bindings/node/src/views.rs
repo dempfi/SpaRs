@@ -59,6 +59,8 @@ pub struct TokenAnnotations {
     pub entity_iob: Option<String>,
     #[napi(ts_type = "EntityLabel | ''")]
     pub entity_type: Option<String>,
+    /// spaCy's `Token.ent_id_`, or `''` without one.
+    pub entity_id: String,
 }
 
 #[napi]
@@ -171,6 +173,7 @@ impl NativeToken {
             sentence_start: token.sentence_start,
             entity_iob: token.entity_iob.clone(),
             entity_type: token.entity_type.clone(),
+            entity_id: token.entity_id.clone().unwrap_or_default(),
         })
     }
     #[napi]

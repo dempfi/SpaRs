@@ -53,7 +53,7 @@ class QualityChecks(unittest.TestCase):
             root = Path(tmp)
             folder = root/".codex/agents"
             folder.mkdir(parents=True)
-            for name in ("reference_review", "test_review", "docs_review", "performance_review"):
+            for name in ("reference_review", "test_review", "docs_review", "api_docs_review", "performance_review"):
                 (folder/f"{name}.toml").write_text(
                     f'name = "{name}"\ndescription = "Review"\n'
                     'developer_instructions = "Inspect evidence"\nsandbox_mode = "read-only"\n')

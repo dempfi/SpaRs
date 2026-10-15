@@ -9,7 +9,7 @@ from doc_paths import check_paths
 
 
 REVIEWER_NAMES: frozenset[str] = frozenset({
-    "reference_review", "test_review", "docs_review", "performance_review",
+    "reference_review", "test_review", "docs_review", "api_docs_review", "performance_review",
 })
 
 

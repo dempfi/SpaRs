@@ -8,7 +8,12 @@ fn document(heads: &[Option<usize>]) -> Doc {
             .iter()
             .enumerate()
             .map(|(i, head)| {
-                let mut token = Token::new(i, i + 1, i, "x".into());
+                let mut token = Token::new(
+                    crate::ByteOffset(i),
+                    crate::ByteOffset(i + 1),
+                    crate::CodePointOffset(i),
+                    "x".into(),
+                );
                 token.head = head.map(TokenIndex);
                 token
             })

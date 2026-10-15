@@ -23,7 +23,12 @@ fn constraints_combine_inclusion_exclusion_and_regex() {
 }
 
 fn tagged_document(word: &str) -> Doc {
-    let mut token = crate::Token::new(0, word.len(), 0, word.into());
+    let mut token = crate::Token::new(
+        crate::ByteOffset(0),
+        crate::ByteOffset(word.len()),
+        crate::CodePointOffset(0),
+        word.into(),
+    );
     token.tag = Some("NN".into());
     Doc {
         text: word.into(),
@@ -95,7 +100,12 @@ fn failed_token_stops_multi_token_pattern_and_empty_documents_stay_empty() {
     .unwrap();
     let mut doc = tagged_document("cat");
     doc.text = "cat cat".into();
-    let mut second = crate::Token::new(4, 7, 4, "cat".into());
+    let mut second = crate::Token::new(
+        crate::ByteOffset(4),
+        crate::ByteOffset(7),
+        crate::CodePointOffset(4),
+        "cat".into(),
+    );
     second.tag = Some("NN".into());
     doc.tokens.push(second);
     let calls = std::cell::Cell::new(0);

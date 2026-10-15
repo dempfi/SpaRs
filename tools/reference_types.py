@@ -26,6 +26,7 @@ class Span(Protocol):
     start: int
     end: int
     label_: str
+    id_: str
     vector: FloatArray
 
 class Token(Protocol):
@@ -43,6 +44,7 @@ class Token(Protocol):
     is_sent_start: bool | None
     ent_iob_: str
     ent_type_: str
+    ent_id_: str
     vector: FloatArray
     @property
     def children(self) -> Iterator['Token']: ...

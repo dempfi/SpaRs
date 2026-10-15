@@ -48,11 +48,7 @@ fn a_rejected_update_does_not_copy_the_document() {
     let doc = Doc::from_json(&snapshot.to_string()).unwrap();
     let size = doc.estimated_heap_bytes();
     let update = |start, end| EntityUpdate {
-        entities: vec![Span {
-            start: TokenIndex(start),
-            end: TokenIndex(end),
-            label: "X".into(),
-        }],
+        entities: vec![Span::new(TokenIndex(start), TokenIndex(end), "X")],
         ..EntityUpdate::default()
     };
     // A valid update copies the document, which the counter sees.

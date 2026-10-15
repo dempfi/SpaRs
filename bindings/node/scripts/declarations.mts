@@ -49,10 +49,12 @@ export declare function isOfficialModelName(name: string): name is OfficialModel
  */
 /** Generated interfaces replaced by precise declarations, with the fields the generator must emit. */
 const replacements: ReadonlyArray<{ name: string; fields: readonly string[]; replacement: string }> = [
-  { name: 'Span', fields: ['start', 'end', 'label'], replacement: `export interface Span<Label extends string = string> {
+  { name: 'Span', fields: ['start', 'end', 'label', 'id'], replacement: `export interface Span<Label extends string = string, Id extends string = string> {
   start: import('./units.js').TokenIndex
   end: import('./units.js').TokenIndex
   label: Label
+  /** spaCy's \`Span.id_\`, or \`''\` without one; only entities carry IDs. */
+  id: Id
 }` },
   { name: 'TokenConstraint', fields: ['attribute', 'predicate'], replacement: '' },
   { name: 'TokenPredicate', fields: ['kind', 'operator', 'value', 'values'], replacement: '' },

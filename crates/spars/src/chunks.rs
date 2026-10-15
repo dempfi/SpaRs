@@ -99,6 +99,7 @@ pub(crate) fn chunks(d: &mut Doc) {
                 start: TokenIndex(left),
                 end: TokenIndex(end),
                 label: "NP".into(),
+                id: None,
             })
         }
     }

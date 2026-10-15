@@ -5,7 +5,14 @@ fn doc(length: usize) -> Doc {
     let text: String = (0..length).map(|_| "a").collect();
     Doc {
         tokens: (0..length)
-            .map(|i| crate::Token::new(i, i + 1, i, "a".into()))
+            .map(|i| {
+                crate::Token::new(
+                    crate::ByteOffset(i),
+                    crate::ByteOffset(i + 1),
+                    crate::CodePointOffset(i),
+                    "a".into(),
+                )
+            })
             .collect(),
         text,
         entities: None,
@@ -16,7 +23,7 @@ fn doc(length: usize) -> Doc {
     }
 }
 fn entity(start: usize, end: usize, label: &str) -> Span {
-    span(start, end, label)
+    span(start, end, label, None)
 }
 fn range(start: usize, end: usize) -> TokenRange {
     TokenRange {

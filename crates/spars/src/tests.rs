@@ -171,7 +171,7 @@ fn document_snapshots_validate_offsets() {
     assert!(Doc::from_json(r#"{"format_version":1,"document":{"text":"bad","tokens":[],"entities":null,"sentences":null,"noun_chunks":null}}"#).is_err());
     assert!(matches!(
         Doc::from_json(
-            r#"{"format_version":3,"document":{"text":"","tokens":[],"entities":null,"sentences":null,"noun_chunks":null}}"#
+            r#"{"format_version":4,"document":{"text":"","tokens":[],"entities":null,"sentences":null,"noun_chunks":null}}"#
         ),
         Err(Error::Unsupported(_))
     ));

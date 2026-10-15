@@ -56,9 +56,14 @@ export function corpus(name: string): ReferenceDocument[] {
     return { text: string(c.text), tokens: array(c.tokens).map(token), entities: spans(c.entities), sentences: spans(c.sentences), noun_chunks: spans(c.noun_chunks) };
   });
 }
+/** Spans without their IDs, after checking there are none: the official suites predate entity IDs, and pipeline output never has them. */
+function withoutIds(spans: Document['entities']): ReferenceSpan[] | null {
+  return spans && spans.map(({ id, ...span }) => { assert.equal(id, ''); return span; });
+}
 export function snapshot(doc: Document): ReferenceDocument {
+  assert.ok(doc.tokens.every(t => t.entityId === ''));
   return { text: doc.text, tokens: doc.tokens.map(t => ({ start: t.byteStart, end: t.byteEnd, idx: t.codePointStart,
     whitespace: t.whitespace === ' ', norm: t.norm, tag: t.tag, pos: t.pos, morphology: t.morphology,
     lemma: t.lemma, head: t.head, dep: t.dep, sentence_start: t.sentenceStart, entity_iob: t.entityIob, entity_type: t.entityType })),
-    entities: doc.entities, sentences: doc.sentences, noun_chunks: doc.nounChunks };
+    entities: withoutIds(doc.entities), sentences: withoutIds(doc.sentences), noun_chunks: withoutIds(doc.nounChunks) };
 }

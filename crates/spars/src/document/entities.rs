@@ -29,9 +29,11 @@ pub enum EntityDefault {
 
 /// A replacement of entity annotation, applied by [`Doc::set_entities`].
 ///
-/// Spans in all four lists must not share tokens. Entities with an empty label are ignored.
-// TODO(entity-ids): spaCy also copies each span's kb_id and id to its tokens; store them with
-// EntityRuler entity IDs (A2). See docs/ENTITIES.md#limits.
+/// Spans in all four lists must not share tokens. Entities with an empty label are ignored. An
+/// entity's `id` is written to its tokens; an entity without one, or with an empty one, keeps each
+/// token's current ID, as in spaCy.
+// TODO(entity-kb-ids): spaCy also copies each span's kb_id to its tokens; SpaRs stores no
+// knowledge-base IDs. See docs/ENTITIES.md#limits.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EntityUpdate {
@@ -57,6 +59,8 @@ fn labeled_spans<'de, D: Deserializer<'de>>(
         start: TokenIndex,
         end: TokenIndex,
         label: String,
+        #[serde(default)]
+        id: Option<String>,
     }
     let entities = Vec::<Entity>::deserialize(deserializer)?;
     Ok(entities
@@ -65,6 +69,7 @@ fn labeled_spans<'de, D: Deserializer<'de>>(
             start: e.start,
             end: e.end,
             label: e.label,
+            id: e.id,
         })
         .collect())
 }
@@ -77,9 +82,17 @@ enum Iob {
     Begin,
 }
 
+/// A token's entity annotation as stored: IOB tag, type and ID.
+struct TokenEntity {
+    index: usize,
+    iob: Option<String>,
+    kind: Option<String>,
+    id: Option<String>,
+}
+
 /// A checked entity update: the tokens whose stored values change, and the resulting entities.
 struct EntityChanges {
-    tokens: Vec<(usize, Option<String>, Option<String>)>,
+    tokens: Vec<TokenEntity>,
     entities: Option<Vec<Span>>,
 }
 
@@ -114,9 +127,11 @@ impl Doc {
 
     /// Write checked changes from [`Doc::entity_changes`] computed for this document's tokens.
     fn apply_entity_changes(&mut self, changes: EntityChanges) {
-        for (i, iob, kind) in changes.tokens {
-            self.tokens[i].entity_iob = iob;
-            self.tokens[i].entity_type = kind;
+        for change in changes.tokens {
+            let token = &mut self.tokens[change.index];
+            token.entity_iob = change.iob;
+            token.entity_type = change.kind;
+            token.entity_id = change.id;
         }
         self.entities = changes.entities;
     }
@@ -158,10 +173,17 @@ impl Doc {
             }
         }
         let mut tags = self.entity_tags()?;
+        // IDs change only where an entity carries a non-empty one; every other token keeps its ID.
+        let mut ids: Vec<Option<&str>> =
+            self.tokens.iter().map(|t| t.entity_id.as_deref()).collect();
         for span in &entities {
+            let id = span.id.as_deref().filter(|id| !id.is_empty());
             for (i, tag) in tags[span.start.0..span.end.0].iter_mut().enumerate() {
                 let iob = if i == 0 { Iob::Begin } else { Iob::Inside };
                 *tag = (iob, span.label.as_str());
+            }
+            if id.is_some() {
+                ids[span.start.0..span.end.0].fill(id);
             }
         }
         for (ranges, iob) in [
@@ -199,25 +221,32 @@ impl Doc {
                 covered[i] = true;
             }
         }
-        let spans = derive_entities(&tags)?;
+        let spans = derive_entities(&tags, &ids)?;
         // spaCy's has_annotation: an empty document counts as annotated.
         let annotated = length == 0 || tags.iter().any(|(iob, _)| *iob != Iob::Missing);
         // Allocate only for written tokens whose stored values change; updates usually touch few.
-        let tokens: Vec<(usize, Option<String>, Option<String>)> = tags
+        let tokens: Vec<TokenEntity> = tags
             .iter()
+            .zip(&ids)
             .zip(&self.tokens)
             .enumerate()
             .filter(|&(i, _)| covered[i])
-            .filter_map(|(i, (&(iob, kind), token))| {
+            .filter_map(|(index, ((&(iob, kind), &id), token))| {
                 let (iob, kind) = match iob {
                     Iob::Missing => (None, None),
                     Iob::Inside => (Some("I"), Some(kind)),
                     Iob::Outside => (Some("O"), Some(kind)),
                     Iob::Begin => (Some("B"), Some(kind)),
                 };
-                let unchanged =
-                    token.entity_iob.as_deref() == iob && token.entity_type.as_deref() == kind;
-                (!unchanged).then(|| (i, iob.map(str::to_owned), kind.map(str::to_owned)))
+                let unchanged = token.entity_iob.as_deref() == iob
+                    && token.entity_type.as_deref() == kind
+                    && token.entity_id.as_deref() == id;
+                (!unchanged).then(|| TokenEntity {
+                    index,
+                    iob: iob.map(str::to_owned),
+                    kind: kind.map(str::to_owned),
+                    id: id.map(str::to_owned),
+                })
             })
             .collect();
         Ok(EntityChanges {
@@ -250,8 +279,9 @@ impl Doc {
 }
 
 /// spaCy's `Doc.ents`: a beginning tag with a type starts an entity, inside tags continue it,
-/// and a beginning tag without a type (a blocked token) starts none.
-fn derive_entities(tags: &[(Iob, &str)]) -> Result<Vec<Span>> {
+/// and a beginning tag without a type (a blocked token) starts none. An entity's ID is its first
+/// token's.
+fn derive_entities(tags: &[(Iob, &str)], ids: &[Option<&str>]) -> Result<Vec<Span>> {
     let mut spans = Vec::new();
     let mut open: Option<(usize, &str)> = None;
     for (i, &(iob, kind)) in tags.iter().enumerate() {
@@ -265,23 +295,24 @@ fn derive_entities(tags: &[(Iob, &str)]) -> Result<Vec<Span>> {
             _ => {}
         }
         if let Some((start, label)) = open.take() {
-            spans.push(span(start, i, label));
+            spans.push(span(start, i, label, ids[start]));
         }
         if iob == Iob::Begin && !kind.is_empty() {
             open = Some((i, kind));
         }
     }
     if let Some((start, label)) = open {
-        spans.push(span(start, tags.len(), label));
+        spans.push(span(start, tags.len(), label, ids[start]));
     }
     Ok(spans)
 }
 
-fn span(start: usize, end: usize, label: &str) -> Span {
+fn span(start: usize, end: usize, label: &str, id: Option<&str>) -> Span {
     Span {
         start: TokenIndex(start),
         end: TokenIndex(end),
         label: label.into(),
+        id: id.map(str::to_owned),
     }
 }
 

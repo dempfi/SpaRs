@@ -3,7 +3,7 @@
 use serde_json::{json, Value};
 use spars::Doc;
 
-const STRINGS: [&str; 8] = [
+const STRINGS: [&str; 9] = [
     "norm",
     "tag",
     "pos",
@@ -12,6 +12,7 @@ const STRINGS: [&str; 8] = [
     "dep",
     "entity_iob",
     "entity_type",
+    "entity_id",
 ];
 
 /// A snapshot with every token string, span list and, when `width > 0`, a tensor.
@@ -21,7 +22,7 @@ fn snapshot(words: usize, width: usize) -> Value {
             json!({"start": i * 5, "end": i * 5 + 4, "idx": i * 5, "whitespace": i + 1 < words,
                    "norm": "word", "tag": "NN", "pos": "NOUN", "morphology": "Number=Sing",
                    "lemma": "word", "dep": "nsubj", "head": i, "sentence_start": i == 0,
-                   "entity_iob": "B", "entity_type": "PERSON"})
+                   "entity_iob": "B", "entity_type": "PERSON", "entity_id": "q42"})
         })
         .collect();
     let spans = |label: &str| -> Value {
@@ -29,13 +30,17 @@ fn snapshot(words: usize, width: usize) -> Value {
             .map(|i| json!({"start": i, "end": i + 1, "label": label}))
             .collect()
     };
+    let mut entities = spans("PERSON");
+    for entity in entities.as_array_mut().unwrap() {
+        entity["id"] = json!("q42");
+    }
     let mut document = json!({"text": vec!["word"; words].join(" "), "tokens": tokens,
-                              "entities": spans("PERSON"), "sentences": if words == 0 { json!([]) } else { json!([{"start": 0, "end": words, "label": ""}]) },
+                              "entities": entities, "sentences": if words == 0 { json!([]) } else { json!([{"start": 0, "end": words, "label": ""}]) },
                               "noun_chunks": spans("NP")});
     if width > 0 {
         document["tensor"] = json!(vec![vec![0.5_f32; width]; words]);
     }
-    json!({"format_version": if width > 0 { 2 } else { 1 }, "document": document})
+    json!({"format_version": 3, "document": document})
 }
 
 fn doc(value: &Value) -> Doc {
@@ -57,7 +62,8 @@ fn exact(value: &Value) -> usize {
     }
     for name in ["entities", "sentences", "noun_chunks"] {
         for span in document[name].as_array().into_iter().flatten() {
-            bytes += std::mem::size_of::<spars::Span>() + length(&span["label"]);
+            bytes +=
+                std::mem::size_of::<spars::Span>() + length(&span["label"]) + length(&span["id"]);
         }
     }
     if let Some(rows) = document["tensor"].as_array() {
@@ -92,7 +98,14 @@ fn estimate_counts_every_owned_allocation() {
         for token in without["document"]["tokens"].as_array_mut().unwrap() {
             token.as_object_mut().unwrap().remove(*name);
         }
-        let removed = 100 * full["document"]["tokens"][0][*name].as_str().unwrap().len();
+        let mut removed = 100 * full["document"]["tokens"][0][*name].as_str().unwrap().len();
+        // An entity's ID must match its first token's, so token IDs go with entity IDs.
+        if *name == "entity_id" {
+            for entity in without["document"]["entities"].as_array_mut().unwrap() {
+                let id = entity.as_object_mut().unwrap().remove("id").unwrap();
+                removed += id.as_str().unwrap().len();
+            }
+        }
         assert_eq!(
             doc(&without).clone().estimated_heap_bytes(),
             full_bytes - removed,
@@ -102,8 +115,10 @@ fn estimate_counts_every_owned_allocation() {
     for name in ["entities", "noun_chunks"] {
         let mut without = full.clone();
         without["document"][name] = Value::Null;
-        let label = full["document"][name][0]["label"].as_str().unwrap().len();
-        let removed = 100 * (std::mem::size_of::<spars::Span>() + label);
+        let first = &full["document"][name][0];
+        let strings =
+            first["label"].as_str().unwrap().len() + first["id"].as_str().map_or(0, str::len);
+        let removed = 100 * (std::mem::size_of::<spars::Span>() + strings);
         assert_eq!(
             doc(&without).clone().estimated_heap_bytes(),
             full_bytes - removed,

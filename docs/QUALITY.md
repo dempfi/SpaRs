@@ -85,21 +85,79 @@ The verification report records commands, outputs, versions, and fixture hashes.
 
 ## Use reviewers with clear jobs
 
-The project defines four Codex reviewers in [`.codex/agents`](../.codex/agents):
+The project defines five Codex reviewers in [`.codex/agents`](../.codex/agents):
 
 - `reference_review` checks behavior against official source and reference results.
 - `test_review` checks whether tests catch mistakes and actually execute in CI.
 - `docs_review` checks plain English, examples, and supported-feature claims.
+- `api_docs_review` checks that public Rust and Node doc comments help a caller at the point of use, following [the API doc comment standard](#write-api-doc-comments-that-help-callers). Changes to public Rust items or Node binding declarations require this review.
 - `performance_review` checks processing time, loading time, memory use, repeated work, and how cost grows with input size. Runtime changes require this review, including new features and dependency changes.
 
 Ask Codex: “Review this change with reference_review, test_review, and docs_review. Give each reviewer its matching scope, wait for their findings, and resolve concrete issues before marking it verified.” Include `performance_review` whenever runtime performance can change. Supply the changed files and comparable before/after results; missing measurements mean performance is unverified. Resolve measured regressions before completion. The main agent makes changes and runs tests; the reviewers inspect files and report findings. Their reports supplement the automated checks.
 
 The files follow the [official custom-agent format](https://learn.chatgpt.com/docs/agent-configuration/subagents). They inherit the selected model and use read-only review instructions. Configuration syntax is checked in CI; loading the files still depends on the Codex client. These agents are not a background service and do not run inside GitHub Actions.
 
-Claude Code equivalents live in [`.claude/agents`](../.claude/agents), using its [Markdown subagent format](https://code.claude.com/docs/en/sub-agents). Their names are `reference-review`, `test-review`, `docs-review`, and `performance-review`, corresponding to the Codex names with underscores. They inherit the session model and allow only `Read`, `Grep`, and `Glob`; the coordinating agent supplies diffs and command results and owns fixes, tests and benchmarks. For example, ask Claude Code to use `reference-review` to review specified changed files against the pinned source. Keep both sets of review responsibilities consistent when editing them. The existing CI configuration check covers the Codex TOML files; it does not validate Claude Code loading.
+Claude Code equivalents live in [`.claude/agents`](../.claude/agents), using its [Markdown subagent format](https://code.claude.com/docs/en/sub-agents). Their names are `reference-review`, `test-review`, `docs-review`, `api-docs-review`, and `performance-review`, corresponding to the Codex names with underscores. They inherit the session model and allow only `Read`, `Grep`, and `Glob`; the coordinating agent supplies diffs and command results and owns fixes, tests and benchmarks. For example, ask Claude Code to use `reference-review` to review specified changed files against the pinned source. Keep both sets of review responsibilities consistent when editing them. The existing CI configuration check covers the Codex TOML files; it does not validate Claude Code loading.
 
 ## Write documentation for developers
 
 Use ordinary words, short paragraphs, and concrete examples. Explain a technical term when it is first needed. Show prerequisites, a command or code example, the result to expect, and the feature's limits. Keep conversation history and task handoffs out of public docs. Keep one prose paragraph per source line.
 
 Rust examples in the README and `docs/` use plain `rust` fences and assertions. Node examples use plain `typescript` fences. `tools/check_docs.py` compiles Rust examples and strictly type-checks TypeScript examples, then runs the actual fenced code; it rejects flags such as `ignore`, `no_run`, and `compile_fail`. Source API documentation also has Cargo doc tests; a `no_run` source example is compile-checked only. Readability and adequate explanations remain review responsibilities.
+
+## Write API doc comments that help callers
+
+API doc comments are the `///` comments on public Rust items and the `/** */` comments in the Node declarations. Editors show them on hover and in autocomplete, so they are often the only documentation a developer reads while writing a call. A comment belongs in the source only if it helps a caller at that moment. A comment that restates the name or type, or that is vague, is worse than no comment: it takes space in the hover and suggests nothing more is needed. Delete such comments or rewrite them.
+
+Ask what a developer needs to use the item correctly that the name and type do not already say. Answer the questions that apply:
+
+- **Purpose:** what the item represents or does, in the caller's terms, and when to use it instead of a similar item.
+- **Valid values and relationships:** what a field must refer to and how it relates to sibling fields or other calls. For example, "the `id` of an earlier node in the same pattern" rather than "a node".
+- **Units and conventions:** byte offsets, UTF-16 offsets, or token indices; inclusive or exclusive ends; ordering of returned items.
+- **Absence and defaults:** what `null`, `undefined`, `None`, an empty list, or an omitted option means, and the default value.
+- **Failure:** what is validated, what throws or returns an error, and under which input.
+- **spaCy correspondence:** the matching spaCy attribute, operator, or method when it helps a reader who knows spaCy. Describe the meaning as well; do not rely only on a link.
+- **Example:** a short example for any entry point or value format that is not obvious from its type. Rust examples are Cargo doc tests and must run.
+
+Avoid these patterns:
+
+- Restating the identifier or type, such as `/** The text. */` on `text: string`.
+- Counting or listing values that the type already defines. The type is authoritative and the copy drifts.
+- Vague qualifiers such as "supported", "handles", "various", or "appropriate" without saying what they mean.
+- Implementation details, internal history, and notes for maintainers. Put those in ordinary `//` comments or the guides.
+- Claims that the code does not enforce or that tests do not verify.
+
+A field whose meaning is fully clear from its name, its type, and its parent's comment needs no comment. Every exported type, function, class, and method needs a summary that states its purpose. Describe the parent's role once on the parent, then document each field only where it adds information.
+
+Node comments are generated: `napi` copies `///` comments from `bindings/node/src` into `bindings/node/index.d.ts`, and `bindings/node/scripts/declarations.mts` adds others. Review the declaration file as callers see it, then fix the comment at its source.
+
+The following Node declaration shows the problem. The comment on `relation` repeats what its type already says, copies a count that must change whenever the type changes, and does not explain `left` or the direction of the relation:
+
+```text
+export interface DependencyLink {
+  left: string
+  /** One of the twenty supported spaCy dependency relation symbols. */
+  relation: DependencyRelation
+}
+```
+
+A helpful version explains how a caller builds the link and how to read an operator:
+
+```text
+/**
+ * Connects a pattern node to a node declared earlier in the same pattern.
+ * A match requires `relation` to hold from the `left` node's token to this node's token.
+ */
+export interface DependencyLink {
+  /** The `id` of an earlier node in `DependencyPattern.nodes`. */
+  left: string
+  /**
+   * A spaCy `DependencyMatcher` operator, read as "left RELATION this".
+   * For example, `>` means this token is a direct child of `left`, `<` means it is the head of `left`,
+   * and `.` means it immediately follows `left`.
+   */
+  relation: DependencyRelation
+}
+```
+
+The `api_docs_review` reviewer applies this standard to changed public items. Check every comment against the code: a precise comment that is wrong is worse than a missing one.

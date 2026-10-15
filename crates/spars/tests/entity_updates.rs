@@ -60,22 +60,16 @@ fn doc(case: &Case) -> Doc {
         let start = text.len();
         let idx = text.chars().count();
         text.push_str(word);
-        tokens.push(Token {
-            start: spars::ByteOffset(start),
-            end: spars::ByteOffset(text.len()),
-            idx: spars::CodePointOffset(idx),
-            whitespace: *space,
-            norm: word.clone(),
-            tag: None,
-            pos: None,
-            morphology: None,
-            lemma: None,
-            head: None,
-            dep: None,
-            sentence_start: None,
-            entity_iob: entity.iob.clone(),
-            entity_type: entity.r#type.clone(),
-        });
+        let mut token = Token::new(
+            spars::ByteOffset(start),
+            spars::ByteOffset(text.len()),
+            spars::CodePointOffset(idx),
+            word.clone(),
+        );
+        token.whitespace = *space;
+        token.entity_iob = entity.iob.clone();
+        token.entity_type = entity.r#type.clone();
+        tokens.push(token);
         if *space {
             text.push(' ');
         }

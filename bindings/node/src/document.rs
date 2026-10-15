@@ -57,6 +57,9 @@ pub struct EntityInput {
     /// An empty label ignores the interval, as spaCy does.
     #[napi(ts_type = "EntityLabel | ''")]
     pub label: Utf16String,
+    /// Written to the entity's tokens. Without one, or with `''`, each token keeps its current ID,
+    /// as in spaCy.
+    pub id: Option<Utf16String>,
 }
 
 /// An unlabeled half-open token interval.
@@ -112,7 +115,7 @@ impl EntityUpdate {
             &["entities", "blocked", "missing", "outside", "default"],
         )?;
         for (name, allowed) in [
-            ("entities", &["start", "end", "label"][..]),
+            ("entities", &["start", "end", "label", "id"][..]),
             ("blocked", &["start", "end"]),
             ("missing", &["start", "end"]),
             ("outside", &["start", "end"]),
@@ -151,11 +154,15 @@ impl EntityUpdate {
             .unwrap_or_default()
             .into_iter()
             .map(|entity| {
-                Ok(spars::Span {
-                    start: views::index(entity.start, env)?,
-                    end: views::index(entity.end, env)?,
-                    label: errors::text(&entity.label).map_err(|error| error.into_napi(env))?,
-                })
+                let text =
+                    |value: &Utf16String| errors::text(value).map_err(|error| error.into_napi(env));
+                let mut span = spars::Span::new(
+                    views::index(entity.start, env)?,
+                    views::index(entity.end, env)?,
+                    text(&entity.label)?,
+                );
+                span.id = entity.id.as_ref().map(text).transpose()?;
+                Ok(span)
             })
             .collect::<Result<_>>()?;
         Ok(spars::EntityUpdate {
