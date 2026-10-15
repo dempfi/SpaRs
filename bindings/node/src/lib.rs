@@ -2,6 +2,7 @@
 mod convert;
 mod dependency_matcher;
 mod document;
+mod entity_ruler;
 mod errors;
 mod lexical;
 mod matcher_types;

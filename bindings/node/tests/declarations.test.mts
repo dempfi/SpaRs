@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { restrictConstructor, addExecutionLoader, addExecutionTypes, addVocabularyTypes, replaceInterface } from '../scripts/declarations.mts';
+import { restrictConstructor, addEntityPatternTypes, addMatcherLoaders, addExecutionLoader, addExecutionTypes, addVocabularyTypes, replaceInterface } from '../scripts/declarations.mts';
 
 test('declaration correction preserves methods and rejects unexpected generator changes', () => {
   const source = 'export declare class Model {\n  process(text: string): Promise<Document>\n}';
@@ -24,6 +24,21 @@ test('execution wrapper is generated once and rejects changed loader contracts',
   assert.match(declaration, /configureExecution/);
   assert.match(declaration, /configureInputLimits/);
   assert.equal(addExecutionTypes(declaration), declaration);
+});
+
+test('matcher and ruler wrappers are installed once each', () => {
+  const loader = addMatcherLoaders('');
+  for (const name of ['PhraseMatcher', 'TokenMatcher', 'DependencyMatcher', 'EntityRuler']) {
+    assert.equal(loader.split(`module.exports.${name},`).length - 1, 1, name);
+  }
+  assert.match(loader, /installEntityRuler\(module\.exports\.EntityRuler, module\.exports\.NativeDocument\)/);
+  assert.equal(addMatcherLoaders(loader), loader);
+});
+
+test('entity pattern types are appended once', () => {
+  const declaration = addEntityPatternTypes('');
+  assert.match(declaration, /export type EntityPattern = EntityTokenPattern \| EntityPhrasePattern/);
+  assert.equal(addEntityPatternTypes(declaration), declaration);
 });
 
 test('interface replacement checks the generated fields and runs once', () => {

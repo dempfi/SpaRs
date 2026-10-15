@@ -6,7 +6,7 @@ Each entry gives spaCy's behavior, SpaRs's behavior, the reason, and the effect 
 
 ## EntityRuler
 
-These apply to the Rust [`EntityRuler`](ENTITY_RULER.md). A rule is the group of patterns with the same label and ID; spaCy names it `label + ent_id_sep + id`, or just the label without an ID, and SpaRs does the same. The pattern listing is spaCy's `patterns` property and SpaRs's `patterns()`. The unit tests are in `crates/spars/src/entity_ruler/tests.rs`; run them with `cargo test --release --offline -p spars-nlp --lib entity_ruler`.
+These apply to the Rust [`EntityRuler`](ENTITY_RULER.md) and the Node [`EntityRuler`](NODE.md#add-entities-with-rules), which uses it. A rule is the group of patterns with the same label and ID; spaCy names it `label + ent_id_sep + id`, or just the label without an ID, and SpaRs does the same. The pattern listing is spaCy's `patterns` property and SpaRs's `patterns()`. The unit tests are in `crates/spars/src/entity_ruler/tests.rs`; run them with `cargo test --release --offline -p spars-nlp --lib entity_ruler`.
 
 ### Ties between identical spans
 

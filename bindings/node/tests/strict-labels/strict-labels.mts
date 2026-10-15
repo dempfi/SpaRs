@@ -1,6 +1,6 @@
 // Compiled separately (tsconfig.json here) because augmentation is global to a compilation. The
 // package name resolves to the local declarations, as it does for an installed package.
-import type { DependencyLabel, Document, EntityInput, EntityLabel, FineGrainedTag, ModelName, ModelNames, Token } from '@spars/node';
+import type { DependencyLabel, Document, EntityInput, EntityLabel, EntityMatch, EntityPattern, EntityRuler, RulerPattern, FineGrainedTag, ModelName, ModelNames, Token } from '@spars/node';
 
 declare module '@spars/node' {
   interface EntityLabels { PRODUCT_CODE: true }
@@ -20,6 +20,10 @@ export type Contracts = [
   Assert<Equal<string extends NonNullable<Token['entityType']> ? true : false, false>>,
   Assert<Equal<string extends NonNullable<Document['entities']>[number]['label'] ? true : false, false>>,
   Assert<Equal<string extends EntityInput['label'] ? true : false, false>>,
+  Assert<Equal<string extends EntityPattern['label'] ? true : false, false>>,
+  Assert<Equal<string extends EntityMatch['label'] ? true : false, false>>,
+  Assert<Equal<string extends RulerPattern['label'] ? true : false, false>>,
+  Assert<Equal<string extends EntityRuler['labels'][number] ? true : false, false>>,
   Assert<Equal<'CUSTOM_TAG' extends FineGrainedTag ? true : false, true>>,
   Assert<Equal<'OTHER_TAG' extends FineGrainedTag ? true : false, false>>,
   Assert<Equal<'nsubj' extends DependencyLabel ? true : false, true>>,

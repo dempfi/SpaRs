@@ -45,7 +45,7 @@ fn bound(value: f64) -> errors::Result<usize> {
     Ok(value as usize)
 }
 impl TokenPattern {
-    fn into_native(self) -> errors::Result<spars::TokenPattern> {
+    pub(crate) fn into_native(self) -> errors::Result<spars::TokenPattern> {
         Ok(spars::TokenPattern {
             tokens: self
                 .tokens
@@ -86,7 +86,7 @@ impl TokenPattern {
                 .collect::<errors::Result<_>>()?,
         })
     }
-    fn from_native(pattern: &spars::TokenPattern) -> Self {
+    pub(crate) fn from_native(pattern: &spars::TokenPattern) -> Self {
         Self {
             tokens: pattern
                 .tokens

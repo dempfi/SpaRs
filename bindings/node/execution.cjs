@@ -236,6 +236,41 @@ function install(binding) {
 }
 
 /**
+ * Run document searches through the scheduler and count them per receiver, so rule changes can
+ * be rejected while a search is queued or running.
+ * @template {string} S
+ * @param {Record<S, (doc: import('./index.js').NativeDocument) => Promise<unknown>>} prototype
+ * @param {{ [Symbol.hasInstance](value: unknown): boolean }} Receiver
+ * @param {typeof import('./index.js').NativeDocument} NativeDocument
+ * @param {S[]} searches
+ * @returns {(receiver: object) => void} a check that throws SPARS_BUSY while searches are pending
+ */
+function guardSearches(prototype, Receiver, NativeDocument, searches) {
+  /** @type {WeakMap<object, number>} */
+  const pending = new WeakMap();
+  for (const name of searches) {
+    const search = prototype[name];
+    if (typeof search !== 'function') throw new TypeError(`Expected a native ${name} method`);
+    /** @this {object} @param {import('./index.js').NativeDocument} doc */
+    prototype[name] = function(doc) {
+      if (!(this instanceof Receiver)) throw new TypeError('Expected a matcher receiver');
+      if (!(doc instanceof NativeDocument)) throw new TypeError('Expected a NativeDocument');
+      if (inputLimits && doc.utf16Length > inputLimits.maxTextLength) return tooLarge('Document exceeds maxTextLength (UTF-16 units)');
+      if (scheduler.full()) return busy();
+      pending.set(this, (pending.get(this) ?? 0) + 1);
+      return scheduler.submit(() => search.call(this, doc)).finally(() => {
+        const count = (pending.get(this) ?? 1) - 1;
+        if (count) pending.set(this, count);
+        else pending.delete(this);
+      });
+    };
+  }
+  return receiver => {
+    if (pending.has(receiver)) throw Object.assign(new Error('Matcher rules cannot change while matching is pending'), { code: 'SPARS_BUSY' });
+  };
+}
+
+/**
  * Keep rule mutation excluded from queued as well as actively executing searches.
  * @template T
  * @template {unknown[]} A
@@ -247,33 +282,47 @@ function installMatcher(Matcher, NativeDocument, kind) {
   const prototype = Matcher.prototype;
   if (installed.has(prototype)) return;
   installed.add(prototype);
-  const find = prototype.findMatches;
   const add = prototype.add;
   const remove = prototype.remove;
-  /** @type {WeakMap<object, number>} */
-  const pending = new WeakMap();
-  prototype.findMatches = function(doc) {
-    if (!(this instanceof Matcher)) throw new TypeError('Expected a matcher receiver');
-    if (!(doc instanceof NativeDocument)) throw new TypeError('Expected a NativeDocument');
-    if (inputLimits && doc.utf16Length > inputLimits.maxTextLength) return tooLarge('Document exceeds maxTextLength (UTF-16 units)');
-    if (scheduler.full()) return busy();
-    pending.set(this, (pending.get(this) ?? 0) + 1);
-    return scheduler.submit(() => find.call(this, doc)).finally(() => {
-      const count = (pending.get(this) ?? 1) - 1;
-      if (count) pending.set(this, count);
-      else pending.delete(this);
-    });
-  };
-  /** @param {object} matcher */
-  const assertMutable = matcher => {
-    if (pending.has(matcher)) throw Object.assign(new Error('Matcher rules cannot change while matching is pending'), { code: 'SPARS_BUSY' });
-  };
+  const assertMutable = guardSearches(prototype, Matcher, NativeDocument, ['findMatches']);
   prototype.add = function(...args) {
     assertMutable(this);
     if (kind !== 'phrase') validatePatterns(args[1], kind);
     add.apply(this, args);
   };
   prototype.remove = function(rule) { assertMutable(this); remove.call(this, rule); };
+}
+
+/**
+ * Queue ruler searches like matcher searches, and reject pattern changes while one is pending.
+ * @param {typeof import('./index.js').EntityRuler} EntityRuler
+ * @param {typeof import('./index.js').NativeDocument} NativeDocument
+ */
+function installEntityRuler(EntityRuler, NativeDocument) {
+  const prototype = EntityRuler.prototype;
+  if (installed.has(prototype)) return;
+  installed.add(prototype);
+  const add = prototype.add;
+  const remove = prototype.remove;
+  const clear = prototype.clear;
+  const assertMutable = guardSearches(prototype, EntityRuler, NativeDocument, ['findMatches', 'annotate']);
+  prototype.add = function(patterns) {
+    assertMutable(this);
+    for (const value of patternArray(patterns)) {
+      const pattern = patternRecord(value, ['label', 'id', 'tokens', 'phrase']);
+      if (typeof pattern.label !== 'string' || (pattern.id != null && typeof pattern.id !== 'string')) {
+        throw Object.assign(new Error('An entity pattern label and id must be strings'), { code: 'SPARS_INVALID_PATTERN' });
+      }
+      const tokens = pattern.tokens != null;
+      const phrase = pattern.phrase != null;
+      if (tokens === phrase) throw Object.assign(new Error('An entity pattern needs exactly one of tokens and phrase'), { code: 'SPARS_INVALID_PATTERN' });
+      if (tokens) validatePatterns([pattern.tokens], 'token');
+      else if (!(pattern.phrase instanceof NativeDocument)) throw Object.assign(new Error('An entity phrase must be a NativeDocument'), { code: 'SPARS_INVALID_PATTERN' });
+    }
+    add.call(this, patterns);
+  };
+  prototype.remove = function(id) { assertMutable(this); remove.call(this, id); };
+  prototype.clear = function() { assertMutable(this); clear.call(this); };
 }
 
 /** @param {unknown} value @param {string[]} allowed @returns {Record<string, unknown>} */
@@ -308,4 +357,4 @@ function validatePatterns(value, kind) {
   }
 }
 
-module.exports = { ERROR_CODES, OFFICIAL_MODEL_NAMES, Scheduler, configureExecution, configureInputLimits, install, installMatcher, isOfficialModelName, isSparsError };
+module.exports = { ERROR_CODES, OFFICIAL_MODEL_NAMES, Scheduler, configureExecution, configureInputLimits, install, installEntityRuler, installMatcher, isOfficialModelName, isSparsError };

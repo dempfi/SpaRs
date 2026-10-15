@@ -540,9 +540,47 @@ const doc = await model.processDocument('I ate 3 apples and ten pears.', 'Tokeni
 assert.deepEqual(await matcher.findMatches(doc), [{ rule: 'count', start: 2, end: 4 }, { rule: 'count', start: 5, end: 7 }]);
 ```
 
+## Add entities with rules
+
+`EntityRuler` adds named entities from token patterns and phrases, like spaCy's `entity_ruler` placed after the recognizer. Each pattern has a `label`, an optional `id`, and either `tokens`, a [token pattern](#token-matching), or `phrase`, a native document. Process phrase text with the same model stages as the documents the ruler annotates, as spaCy runs phrase patterns through the components before the ruler. `annotate(doc)` resolves to a new native document with the ruler's entities and leaves `doc` and its views unchanged; `findMatches(doc)` resolves to every candidate match before filtering, longest first, then earliest, with `id` `''` for a pattern without an ID. Both run on Node's worker pool under the same admission limits as the matchers; every other member is synchronous. The assertions below show `en_core_web_md` predictions.
+
+```typescript
+import assert from 'node:assert/strict';
+import { EntityRuler, loadModel } from './index.js';
+import type { EntityPattern } from './index.js';
+
+const model = await loadModel(process.env.SPARS_MODEL ?? 'en_core_web_lg');
+const doc = await model.processDocument('Tim Cook opened Apple Park in Cupertino.');
+const patterns: EntityPattern[] = [
+  { label: 'FAC', id: 'apple-park', phrase: await model.processDocument('Apple Park') },
+  { label: 'CITY', tokens: { tokens: [{ constraints: [{ attribute: 'lower', predicate: { kind: 'equals', value: 'cupertino' } }], repetition: { kind: 'once' } }] } },
+];
+const labelsAndIds = (entities: { label: string; id: string }[] | null) => entities?.map(({ label, id }) => [label, id]);
+
+// The recognizer already labeled Apple Park FAC and Cupertino GPE. By default the ruler skips
+// matches on tokens that already belong to an entity, so both matches are skipped.
+const ruler = new EntityRuler();
+ruler.add(patterns);
+assert.deepEqual(labelsAndIds((await ruler.annotate(doc)).toObject().entities), [['PERSON', ''], ['FAC', ''], ['GPE', '']]);
+
+// With overwriting, matches replace the entities they overlap.
+const overwriting = new EntityRuler({ overwriteEntities: true });
+overwriting.add(patterns);
+const annotated = await overwriting.annotate(doc);
+assert.deepEqual(labelsAndIds(annotated.toObject().entities), [['PERSON', ''], ['FAC', 'apple-park'], ['CITY', '']]);
+assert.equal(annotated.token(3).annotations().entityId, 'apple-park');
+assert.deepEqual(overwriting.labels, ['CITY', 'FAC']);
+overwriting.remove('apple-park');
+assert.deepEqual(overwriting.ids, []);
+```
+
+The options are spaCy's settings: `overwriteEntities` (`overwrite_ents`, default `false`), `phraseAttribute` (`phrase_matcher_attr`, the [phrase attribute](#phrase-matching-on-text-lowercase-annotations-lexical-flags-or-length) phrases compare, default `'ORTH'`) and `idSeparator` (`ent_id_sep`, default `'||'`). Pass a model as the second argument, `new EntityRuler(options, model)`, to use lexical flag conditions or a lexical flag phrase attribute. The read-only properties `size`, `labels`, `ids` and `patterns` report the added patterns like spaCy's `len(ruler)`, `labels`, `ent_ids` and `patterns`, and `overwriteEntities`, `phraseAttribute` and `idSeparator` report the options. As with `PhraseMatcher`, attribute names must be uppercase, where spaCy also accepts lowercase. `patterns` lists phrases by their text and leaves `id` out for a pattern without one or with an empty one; as in spaCy, a token pattern added with `id: ''` is still listed by `ids` as `''` and removed by `remove('')`. `remove(id)` removes every pattern with that ID, and `clear()` removes every pattern and keeps the options and model. How matches become entities, how rule names combine labels and IDs, and the accepted differences from spaCy are described in the [EntityRuler guide](ENTITY_RULER.md).
+
+`add` checks every pattern before changing the ruler. A pattern with an unknown field, with a `label` or `id` that is not a string, with both or neither of `tokens` and `phrase`, with a `phrase` that is not a native document, with an invalid token pattern, with a lexical flag condition or flag phrase attribute on a ruler created without a model, or with a phrase lacking the annotation the phrase attribute compares throws `SPARS_INVALID_PATTERN` and adds nothing. `remove` of an ID that was never added or whose patterns were already removed throws `SPARS_INVALID_PATTERN`. When the ruler is created, an empty `idSeparator` throws `SPARS_INVALID_PATTERN`, an unknown `phraseAttribute` `SPARS_UNSUPPORTED`, and an undeclared option, such as spaCy's own `overwrite_ents`, or a value of the wrong type throws `InvalidArg`. A search over a document missing an annotation a token condition reads, such as a lemma condition on a tokenizer-only document, rejects with `SPARS_INFERENCE`. `add`, `remove` and `clear` throw `SPARS_BUSY` while a `findMatches` or `annotate` call on the same ruler is queued or running, and passing anything other than a native document to `findMatches` or `annotate` throws a `TypeError`. Loading or saving patterns, spaCy's pattern dictionaries, fuzzy matching and running the ruler before the recognizer are not provided.
+
 ## Errors and verification
 
-An incompatible native addon can throw `SPARS_NATIVE_INCOMPATIBLE` during package import; remove stale native-library overrides or install matching package versions. Invalid matcher registration throws synchronously. Model and processing failures reject their promises with an `Error` containing a `code` and message. Codes are `SPARS_IO`, `SPARS_INVALID_MODEL`, `SPARS_UNSUPPORTED`, `SPARS_INVALID_TEXT`, `SPARS_BOUNDS`, `SPARS_INFERENCE`, `SPARS_INVALID_PATTERN`, `SPARS_BUSY`, `SPARS_INPUT_LIMIT`, and `SPARS_TEXT_TOO_LONG`. For `pipe`, errors reject iteration; `process` and `processBatch` throw immediately for invalid JavaScript argument types or unknown stages; when the queue is full, `SPARS_BUSY` takes precedence over checking individual batch elements. `vector` also throws immediately for malformed text. Use `loadModel`; constructing `Model` directly is unsupported and its TypeScript constructor is private.
+An incompatible native addon can throw `SPARS_NATIVE_INCOMPATIBLE` during package import; remove stale native-library overrides or install matching package versions. Invalid matcher or EntityRuler registration throws synchronously. Model and processing failures reject their promises with an `Error` containing a `code` and message. Codes are `SPARS_IO`, `SPARS_INVALID_MODEL`, `SPARS_UNSUPPORTED`, `SPARS_INVALID_TEXT`, `SPARS_BOUNDS`, `SPARS_INFERENCE`, `SPARS_INVALID_PATTERN`, `SPARS_BUSY`, `SPARS_INPUT_LIMIT`, and `SPARS_TEXT_TOO_LONG`. For `pipe`, errors reject iteration; `process` and `processBatch` throw immediately for invalid JavaScript argument types or unknown stages; when the queue is full, `SPARS_BUSY` takes precedence over checking individual batch elements. `vector` also throws immediately for malformed text. Use `loadModel`; constructing `Model` directly is unsupported and its TypeScript constructor is private.
 
 After the [reference setup](DEVELOPMENT.md#set-up-the-project), run:
 

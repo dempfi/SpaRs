@@ -47,6 +47,55 @@ const ATTRIBUTES: [(&str, spars::PhraseAttribute); 27] = [
     ("LENGTH", spars::PhraseAttribute::Length),
 ];
 
+/// spaCy's spelling of an attribute. Exhaustive, so a new attribute must be named here;
+/// [`attribute`] accepts the same names.
+pub(crate) fn attribute_name(attribute: spars::PhraseAttribute) -> &'static str {
+    match attribute {
+        spars::PhraseAttribute::Orth => "ORTH",
+        spars::PhraseAttribute::Text => "TEXT",
+        spars::PhraseAttribute::Lower => "LOWER",
+        spars::PhraseAttribute::Norm => "NORM",
+        spars::PhraseAttribute::Lemma => "LEMMA",
+        spars::PhraseAttribute::Pos => "POS",
+        spars::PhraseAttribute::Tag => "TAG",
+        spars::PhraseAttribute::Dep => "DEP",
+        spars::PhraseAttribute::Morph => "MORPH",
+        spars::PhraseAttribute::IsAlpha => "IS_ALPHA",
+        spars::PhraseAttribute::IsAscii => "IS_ASCII",
+        spars::PhraseAttribute::IsDigit => "IS_DIGIT",
+        spars::PhraseAttribute::IsLower => "IS_LOWER",
+        spars::PhraseAttribute::IsUpper => "IS_UPPER",
+        spars::PhraseAttribute::IsTitle => "IS_TITLE",
+        spars::PhraseAttribute::IsPunct => "IS_PUNCT",
+        spars::PhraseAttribute::IsSpace => "IS_SPACE",
+        spars::PhraseAttribute::IsBracket => "IS_BRACKET",
+        spars::PhraseAttribute::IsQuote => "IS_QUOTE",
+        spars::PhraseAttribute::IsLeftPunct => "IS_LEFT_PUNCT",
+        spars::PhraseAttribute::IsRightPunct => "IS_RIGHT_PUNCT",
+        spars::PhraseAttribute::IsCurrency => "IS_CURRENCY",
+        spars::PhraseAttribute::IsStop => "IS_STOP",
+        spars::PhraseAttribute::LikeNum => "LIKE_NUM",
+        spars::PhraseAttribute::LikeUrl => "LIKE_URL",
+        spars::PhraseAttribute::LikeEmail => "LIKE_EMAIL",
+        spars::PhraseAttribute::Length => "LENGTH",
+    }
+}
+
+/// Parse spaCy's spelling of a phrase attribute, defaulting to `ORTH`.
+pub(crate) fn attribute(name: Option<&str>) -> errors::Result<spars::PhraseAttribute> {
+    let name = name.unwrap_or("ORTH");
+    ATTRIBUTES
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map(|&(_, attribute)| attribute)
+        .ok_or_else(|| {
+            spars::Error::Unsupported(format!(
+                "phrase matching does not support the attribute {name:?}"
+            ))
+            .into()
+        })
+}
+
 #[napi]
 pub struct PhraseMatcher {
     inner: Arc<spars::PhraseMatcher>,
@@ -71,15 +120,8 @@ impl PhraseMatcher {
             .map(|value| errors::text(value))
             .transpose()
             .map_err(|error| error.into_napi(env))?;
-        let name = attribute.as_deref().unwrap_or("ORTH");
-        let Some(&(_, attribute)) = ATTRIBUTES.iter().find(|(known, _)| *known == name) else {
-            return Err(
-                errors::BindingError::from(spars::Error::Unsupported(format!(
-                    "PhraseMatcher does not support the attribute {name:?}"
-                )))
-                .into_napi(env),
-            );
-        };
+        let attribute =
+            self::attribute(attribute.as_deref()).map_err(|error| error.into_napi(env))?;
         let matcher = match model {
             Some(model) => spars::PhraseMatcher::with_lexicon(attribute, model.inner.lexicon()),
             None => spars::PhraseMatcher::with_attribute(attribute),
@@ -91,36 +133,7 @@ impl PhraseMatcher {
 
     #[napi(getter, ts_return_type = "PhraseAttribute")]
     pub fn attribute(&self) -> &'static str {
-        // Exhaustive, so a new attribute must be named here; `new` accepts the same names.
-        match self.inner.attribute() {
-            spars::PhraseAttribute::Orth => "ORTH",
-            spars::PhraseAttribute::Text => "TEXT",
-            spars::PhraseAttribute::Lower => "LOWER",
-            spars::PhraseAttribute::Norm => "NORM",
-            spars::PhraseAttribute::Lemma => "LEMMA",
-            spars::PhraseAttribute::Pos => "POS",
-            spars::PhraseAttribute::Tag => "TAG",
-            spars::PhraseAttribute::Dep => "DEP",
-            spars::PhraseAttribute::Morph => "MORPH",
-            spars::PhraseAttribute::IsAlpha => "IS_ALPHA",
-            spars::PhraseAttribute::IsAscii => "IS_ASCII",
-            spars::PhraseAttribute::IsDigit => "IS_DIGIT",
-            spars::PhraseAttribute::IsLower => "IS_LOWER",
-            spars::PhraseAttribute::IsUpper => "IS_UPPER",
-            spars::PhraseAttribute::IsTitle => "IS_TITLE",
-            spars::PhraseAttribute::IsPunct => "IS_PUNCT",
-            spars::PhraseAttribute::IsSpace => "IS_SPACE",
-            spars::PhraseAttribute::IsBracket => "IS_BRACKET",
-            spars::PhraseAttribute::IsQuote => "IS_QUOTE",
-            spars::PhraseAttribute::IsLeftPunct => "IS_LEFT_PUNCT",
-            spars::PhraseAttribute::IsRightPunct => "IS_RIGHT_PUNCT",
-            spars::PhraseAttribute::IsCurrency => "IS_CURRENCY",
-            spars::PhraseAttribute::IsStop => "IS_STOP",
-            spars::PhraseAttribute::LikeNum => "LIKE_NUM",
-            spars::PhraseAttribute::LikeUrl => "LIKE_URL",
-            spars::PhraseAttribute::LikeEmail => "LIKE_EMAIL",
-            spars::PhraseAttribute::Length => "LENGTH",
-        }
+        attribute_name(self.inner.attribute())
     }
 
     #[napi(getter)]

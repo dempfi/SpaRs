@@ -68,7 +68,7 @@ pub enum Error {
     Model(String),
     #[error("unsupported configuration: {0}")]
     Unsupported(String),
-    #[error("invalid dependency pattern: {0}")]
+    #[error("invalid pattern: {0}")]
     Pattern(String),
     #[error("invalid span or offset")]
     Bounds,
