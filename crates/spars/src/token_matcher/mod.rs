@@ -5,6 +5,7 @@ use crate::dependency_matcher::predicates::{
 };
 use crate::{Doc, Error, Lexicon, Result, TokenConstraint, TokenIndex};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// An ordered sequence of token conditions.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -68,6 +69,8 @@ struct Rule {
 #[derive(Default)]
 pub struct TokenMatcher {
     rules: Vec<Rule>,
+    // The position of each rule in `rules`, so lookups do not scan every rule.
+    index: HashMap<String, usize>,
     compiled: Vec<CompiledPattern>,
     lexicon: Option<Lexicon>,
 }
@@ -90,17 +93,39 @@ impl TokenMatcher {
         self.rules.is_empty()
     }
     pub fn contains(&self, name: &str) -> bool {
-        self.rules.iter().any(|rule| rule.name == name)
+        self.index.contains_key(name)
     }
     pub fn get(&self, name: &str) -> Option<&[TokenPattern]> {
-        self.rules
-            .iter()
-            .find(|rule| rule.name == name)
-            .map(|rule| rule.patterns.as_slice())
+        self.index
+            .get(name)
+            .map(|&i| self.rules[i].patterns.as_slice())
     }
     /// Validate every pattern before modifying the matcher. Repeated names append patterns.
     pub fn add(&mut self, name: impl Into<String>, patterns: Vec<TokenPattern>) -> Result<()> {
         let name = name.into();
+        self.check_lexicon(&patterns)?;
+        let compiled = patterns
+            .iter()
+            .map(|pattern| compile(&name, pattern))
+            .collect::<Result<Vec<_>>>()?;
+        if let Some(&i) = self.index.get(&name) {
+            self.rules[i].patterns.extend(patterns);
+        } else {
+            self.index.insert(name.clone(), self.rules.len());
+            self.rules.push(Rule { name, patterns });
+        }
+        // This order includes later additions to an already registered rule.
+        self.compiled.extend(compiled);
+        Ok(())
+    }
+    /// Return the error [`TokenMatcher::add`] would return for these patterns, without adding them.
+    pub(crate) fn check(&self, name: &str, patterns: &[TokenPattern]) -> Result<()> {
+        self.check_lexicon(patterns)?;
+        patterns
+            .iter()
+            .try_for_each(|pattern| compile(name, pattern).map(drop))
+    }
+    fn check_lexicon(&self, patterns: &[TokenPattern]) -> Result<()> {
         if self.lexicon.is_none()
             && patterns
                 .iter()
@@ -112,26 +137,17 @@ impl TokenMatcher {
                 "lexical flag conditions require a matcher created with a lexicon".into(),
             ));
         }
-        let compiled = patterns
-            .iter()
-            .map(|pattern| compile(&name, pattern))
-            .collect::<Result<Vec<_>>>()?;
-        if let Some(rule) = self.rules.iter_mut().find(|rule| rule.name == name) {
-            rule.patterns.extend(patterns);
-        } else {
-            self.rules.push(Rule { name, patterns });
-        }
-        // This order includes later additions to an already registered rule.
-        self.compiled.extend(compiled);
         Ok(())
     }
     pub fn remove(&mut self, name: &str) -> Result<()> {
         let index = self
-            .rules
-            .iter()
-            .position(|rule| rule.name == name)
+            .index
+            .remove(name)
             .ok_or_else(|| Error::Pattern(format!("unknown token rule {name:?}")))?;
         self.rules.remove(index);
+        for later in &self.rules[index..] {
+            *self.index.get_mut(&later.name).expect("indexed rule") -= 1;
+        }
         self.compiled.retain(|pattern| pattern.name != name);
         Ok(())
     }

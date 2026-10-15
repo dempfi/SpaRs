@@ -29,7 +29,9 @@
 mod config;
 mod dependency_matcher;
 mod document;
+mod entity_ruler;
 pub use dependency_matcher::*;
+pub use entity_ruler::*;
 mod hash;
 mod lexical;
 pub use lexical::Lexeme;

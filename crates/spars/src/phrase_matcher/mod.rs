@@ -302,18 +302,7 @@ impl PhraseMatcher {
     /// All fallible validation completes before mutation; duplicate additions still update terminal order.
     pub fn add(&mut self, name: impl Into<PhraseRuleId>, documents: &[&Doc]) -> Result<()> {
         let name = name.into();
-        let key = rule_key(&name.0);
-        if self
-            .identities
-            .get(&key)
-            .is_some_and(|other| other != &name)
-        {
-            return Err(Error::Pattern("phrase rule hash collision".into()));
-        }
-        // Reject even an empty addition, so a flag rule never exists without a lexicon.
-        if self.attribute.flag().is_some() && self.lexicon.is_none() {
-            return Err(missing_lexicon());
-        }
+        let key = self.check_rule(&name.0)?;
         let patterns = documents
             .iter()
             .map(|doc| PhrasePattern::from_doc(doc, self.attribute, self.lexicon.as_ref()))
@@ -351,6 +340,30 @@ impl PhraseMatcher {
             }
         }
         Ok(())
+    }
+    /// Return the error [`PhraseMatcher::add`] would return for these documents, without adding them.
+    pub(crate) fn check(&self, name: &str, documents: &[&Doc]) -> Result<()> {
+        self.check_rule(name)?;
+        documents.iter().try_for_each(|doc| {
+            PhrasePattern::from_doc(doc, self.attribute, self.lexicon.as_ref()).map(drop)
+        })
+    }
+    /// The rule's hash key, rejecting a collision with another rule and a flag attribute without
+    /// a lexicon.
+    fn check_rule(&self, name: &str) -> Result<u64> {
+        let key = rule_key(name);
+        if self
+            .identities
+            .get(&key)
+            .is_some_and(|other| other.0 != name)
+        {
+            return Err(Error::Pattern("phrase rule hash collision".into()));
+        }
+        // Reject even an empty addition, so a flag rule never exists without a lexicon.
+        if self.attribute.flag().is_some() && self.lexicon.is_none() {
+            return Err(missing_lexicon());
+        }
+        Ok(key)
     }
     /// Remove a rule and reclaim its unused trie nodes. Unknown names return an error.
     pub fn remove(&mut self, name: &str) -> Result<()> {
@@ -462,7 +475,7 @@ impl PhraseMatcher {
         Ok(matches)
     }
 }
-fn rule_key(name: &str) -> u64 {
+pub(crate) fn rule_key(name: &str) -> u64 {
     static SYMBOLS: OnceLock<HashMap<String, u64>> = OnceLock::new();
     *SYMBOLS
         .get_or_init(|| {

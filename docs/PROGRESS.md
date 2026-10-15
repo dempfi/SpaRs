@@ -56,7 +56,7 @@ See [performance measurements](PERFORMANCE.md) for commands to measure loading t
 
 Dependency traversal, sentence access, the [typed DependencyMatcher](DEPENDENCY_MATCHER.md), and the [Token Matcher](TOKEN_MATCHER.md) are implemented. Token Matcher supports shared text, annotation, lexical flag and length conditions with repetition and overlapping results. DependencyMatcher verification covers all 20 relationships and its declared token-condition subset, including ordered results and supplementary morphology regressions. Wider matcher compatibility remains partial. The next capabilities, in priority order, are:
 
-1. Add EntityRuler and SpanRuler (deliveries A2 and A3), building on the implemented entity annotation updates (A1).
+1. Finish EntityRuler (A2) with its Node API, then add span groups and SpanRuler (A3), building on the implemented entity annotation updates (A1).
 2. Store token string annotations once per document, as described in [interned token strings](#interned-token-strings).
 3. Add the remaining matcher selection options, regex and fuzzy predicates (deliveries M4 and M5).
 4. Add dependency-checked component selection, then measured neural batching.
@@ -73,7 +73,7 @@ Every string annotation (`norm`, `tag`, `pos`, `morphology`, `lemma`, `dep`, ent
 
 ## Implementation sequence
 
-Deliveries M1, M2, M3 and A1 are implemented; A2, A3, M4, M5 and the later milestones are planned, not implemented or verified. Rulers depend only on the verified token and phrase pattern subset, so A1–A3 follow M3 and precede M4 and M5, which add selection options and predicate kinds that rulers do not require. Complete each as a bounded change; do not combine a new annotation contract, a neural algorithm change, and model conversion into one acceptance result. Preserve the existing English sm/md/lg fixtures, exact discrete outputs, numerical tolerances, offline inference, and immutable reusable models throughout.
+Deliveries M1, M2, M3 and A1 are implemented; A2 is partly implemented (entity IDs and the Rust `EntityRuler`; its Node API remains); A3, M4, M5 and the later milestones are planned, not implemented or verified. Rulers depend only on the verified token and phrase pattern subset, so A1–A3 follow M3 and precede M4 and M5, which add selection options and predicate kinds that rulers do not require. Complete each as a bounded change; do not combine a new annotation contract, a neural algorithm change, and model conversion into one acceptance result. Preserve the existing English sm/md/lg fixtures, exact discrete outputs, numerical tolerances, offline inference, and immutable reusable models throughout.
 
 ### 1. Shared matcher conditions and options
 
@@ -98,7 +98,7 @@ Annotation updates are a prerequisite for rulers and independent sentence segmen
 | Delivery | Scope | Acceptance |
 |---|---|---|
 | A1 (implemented) | Checked entity annotation replacement and the ownership contract for annotation updates | Entity spans, token entity types and IOB tags (inside, outside or beginning of an entity) remain consistent; distinguish missing, empty, blocked and outside states where supported; invalid bounds, overlaps and failed edits preserve the stated contract; text and offsets remain exact. Evidence: `entity-updates-v1` through Rust and Node, including one case of updates to `en_core_web_md` predictions, with every state recomputed without spaCy in the reference tool tests. Rust updates take exclusive access (`&mut Doc`); Node returns a new document and keeps existing handles valid. See the [entity editing guide](ENTITIES.md#limits) |
-| A2 | EntityRuler applied after NER or on a document without entity predictions, using the verified token and phrase pattern subset | Official precedence, overlap filtering, overwrite policy, rule lifecycle and entity IDs; complete document comparisons and snapshot round-trips, including entity IDs. Implemented so far: entity ID storage (tokens and entities carry spaCy's IDs, `set_entities` and `withEntities` write them, and version-3 snapshots keep them), checked by `entity-ids-v1` through Rust and Node, with every state recomputed without spaCy |
+| A2 | EntityRuler applied after NER or on a document without entity predictions, using the verified token and phrase pattern subset | Official precedence, overlap filtering, overwrite policy, rule lifecycle and entity IDs; complete document comparisons and snapshot round-trips, including entity IDs. Implemented so far: entity ID storage (tokens and entities carry spaCy's IDs, `set_entities` and `withEntities` write them, and version-3 snapshots keep them), checked by `entity-ids-v1` through Rust and Node, with every state recomputed without spaCy; the Rust [`EntityRuler`](ENTITY_RULER.md), checked by `entity-ruler-v1` with complete result documents and snapshot round trips, and every annotation recomputed without spaCy. Remaining: the Node API |
 | A3 | Named span groups, followed by SpanRuler | Overlapping spans, labels, IDs, group replacement/append behavior and filtering match the supported options; groups and annotations survive snapshots without losing metadata |
 | A4 | EntityRuler before NER, with preset-entity support in the native recognizer | Reference action traces and final annotations establish that NER respects existing entities and blocking; unsupported preset states fail explicitly |
 
@@ -168,7 +168,7 @@ Acceptance: run the same reference cases through Rust and Node, test ownership a
 
 ### 4. Add rule-based annotation after document-editing contracts
 
-Build EntityRuler and SpanRuler on the verified matchers once document annotation updates are supported. Deliveries A1–A4 in the [implementation sequence](#2-checked-annotations-and-rule-based-annotation) define the order. First define conflict resolution, overwrite policy, entity IOB updates, span groups, and token/span view validity against spaCy. Retokenization has separate merge/split and dependency-update requirements and is not a prerequisite for read-only matching.
+The Rust EntityRuler is built on the verified matchers and checked annotation updates; its Node API, span groups and SpanRuler, and use before the recognizer remain. Deliveries A1–A4 in the [implementation sequence](#2-checked-annotations-and-rule-based-annotation) define the order. Define span groups and token/span view validity against spaCy before SpanRuler. Retokenization has separate merge/split and dependency-update requirements and is not a prerequisite for read-only matching.
 
 Acceptance: official comparisons verify complete documents after rule application, including overlaps and existing annotations. Failed edits preserve the documented state contract, and native snapshots retain the resulting annotations.
 

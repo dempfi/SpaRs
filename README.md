@@ -50,6 +50,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `Doc::set_entities` replaces entity annotation like spaCy's `Doc.set_ents`, keeping token IOB tags, entity types and the entity list consistent and rejecting invalid updates without changing the document; `Doc::with_entities` returns an updated copy instead. See [editing entities](docs/ENTITIES.md).
 
+`EntityRuler` adds entities from token patterns and phrases like spaCy's `entity_ruler`, after the recognizer or without it, with spaCy's priority, overwrite and entity-ID behavior and a few [documented differences](docs/ENTITY_RULER.md#differences-from-spacy). See [adding entities with rules](docs/ENTITY_RULER.md).
+
 `PhraseMatcher` matches reusable phrase patterns by exact text (`ORTH`/`TEXT`), pinned Unicode lowercase (`LOWER`), token norm (`NORM`), linguistic annotations (`LEMMA`, `POS`, `TAG`, `DEP` and `MORPH`), lexical flags such as `IS_ALPHA`, or `LENGTH`, including ordered overlaps and registration/removal. It accepts existing documents without inference or downloads. See the [PhraseMatcher guide](docs/PHRASE_MATCHER.md). The [Node API](docs/NODE.md) exposes all three native matchers, retained document/token/span views, entity editing, traversal, vectors and similarity, lexical queries, snapshots, and offline model-store management.
 
 ## Install a model without Python
