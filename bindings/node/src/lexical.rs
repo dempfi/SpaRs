@@ -6,7 +6,7 @@ use napi_derive::napi;
 /// Owned lexical properties from the loaded model's pinned language resources.
 #[napi(object, object_from_js = false)]
 pub struct Lexeme {
-    /// Exact unsigned 64-bit string identity, represented as JavaScript bigint.
+    /// spaCy's string-store hash for the text (`Lexeme.orth`), as an exact unsigned 64-bit bigint.
     pub orth: BigInt,
     pub norm: String,
     pub shape: String,
@@ -67,8 +67,8 @@ impl From<spars::Lexeme> for Lexeme {
 
 #[napi]
 impl Model {
-    /// Read lexical properties without tokenizing or running the pipeline.
-    /// Changing this owned result cannot modify the model's vocabulary.
+    /// Lexical properties of `text` as one lexeme, like spaCy `nlp.vocab[text]`, without tokenizing
+    /// or running the pipeline. Throws `SPARS_INVALID_TEXT` for an unpaired surrogate.
     #[napi(strict)]
     pub fn lexeme(&self, env: Env, text: Utf16String) -> Result<Lexeme> {
         let text = errors::text(&text).map_err(|error| error.into_napi(env))?;

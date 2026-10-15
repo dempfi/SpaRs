@@ -20,24 +20,30 @@ pub struct DependencyLink {
     pub left: Utf16String,
     /// A spaCy `DependencyMatcher` operator (spaCy's `REL_OP`), read as "left RELATION this".
     /// For example, `>` means this token is a direct child of `left`, `<` means it is the head of
-    /// `left`, and `.` means it immediately follows `left`.
+    /// `left`, and `.` means it immediately follows `left`. Order operators (`.`, `.*`, `;`, `;*`)
+    /// only relate tokens in the same dependency tree; stored sentence annotations are not used.
     #[napi(ts_type = "DependencyRelation")]
     pub relation: Utf16String,
 }
 
+/// One token to find, with the conditions it must satisfy and its relation to an earlier node.
 #[napi(object)]
 pub struct DependencyNode {
+    /// Unique within the pattern; later nodes refer to it in `link.left`.
     pub id: Utf16String,
+    /// All must hold for the same token; empty matches any token.
     pub constraints: Vec<TokenConstraint>,
-    /// Absent on the first node; later nodes link to an earlier node ID.
+    /// Omit on the first node; required on every later node.
     pub link: Option<DependencyLink>,
 }
 
+/// Nodes in declaration order; each match reports its tokens in this order.
 #[napi(object)]
 pub struct DependencyPattern {
     pub nodes: Vec<DependencyNode>,
 }
 
+/// A match of `rule`; `tokens[i]` is the token matched by pattern node `i`.
 #[napi(object, object_from_js = false)]
 pub struct DependencyMatch {
     pub rule: String,
@@ -150,6 +156,7 @@ impl DependencyPattern {
 }
 
 #[derive(Default)]
+/// Finds token groups linked by dependency relations, like spaCy's `DependencyMatcher`.
 #[napi]
 pub struct DependencyMatcher {
     inner: Arc<spars::DependencyMatcher>,
@@ -169,6 +176,7 @@ impl DependencyMatcher {
         }
     }
 
+    /// Number of rules, like spaCy `len(matcher)`.
     #[napi(getter)]
     pub fn size(&self, env: Env) -> Result<u32> {
         errors::number(self.inner.len()).map_err(|error| error.into_napi(env))
@@ -180,7 +188,7 @@ impl DependencyMatcher {
         Ok(self.inner.contains(&rule))
     }
 
-    /// Return owned patterns, or null when the rule is absent.
+    /// Patterns of `rule` in addition order, or null when `rule` is not registered.
     #[napi(strict)]
     pub fn get(&self, env: Env, rule: Utf16String) -> Result<Option<Vec<DependencyPattern>>> {
         let rule = errors::text(&rule).map_err(|error| error.into_napi(env))?;
@@ -192,7 +200,10 @@ impl DependencyMatcher {
         }))
     }
 
-    /// Validate the complete addition before appending to an existing rule.
+    /// Append patterns to `rule`; all are validated before the matcher changes. Throws
+    /// `SPARS_INVALID_PATTERN` for an empty pattern, a duplicate `id`, a link on the first node, a
+    /// missing link on a later node, a `left` that is not an earlier node, or flag conditions
+    /// without a model, and `SPARS_BUSY` while `findMatches` is pending.
     #[napi(strict)]
     pub fn add(
         &mut self,
@@ -212,6 +223,7 @@ impl DependencyMatcher {
             .map_err(|error| errors::BindingError::from(error).into_napi(env))
     }
 
+    /// Throws `SPARS_INVALID_PATTERN` for an unregistered rule and `SPARS_BUSY` while `findMatches` is pending.
     #[napi(strict)]
     pub fn remove(&mut self, env: Env, rule: Utf16String) -> Result<()> {
         let rule = errors::text(&rule).map_err(|error| error.into_napi(env))?;
@@ -221,7 +233,10 @@ impl DependencyMatcher {
             .map_err(|error| errors::BindingError::from(error).into_napi(env))
     }
 
-    /// Search on Node's worker pool in native rule, pattern and candidate order.
+    /// Matches on Node's worker pool, grouped by rule in registration order, then by pattern in
+    /// addition order. A matcher with rules needs a parsed document: missing or cyclic heads, or a
+    /// condition whose annotation is null on any token, reject with `SPARS_INFERENCE`. Rejects with
+    /// `SPARS_BUSY` or `SPARS_INPUT_LIMIT` under `configureExecution` and `configureInputLimits`.
     #[napi(strict, ts_return_type = "Promise<Array<DependencyMatch>>")]
     pub fn find_matches(&self, document: &NativeDocument) -> AsyncTask<DependencyMatchTask> {
         AsyncTask::new(DependencyMatchTask {

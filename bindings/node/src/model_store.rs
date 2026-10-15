@@ -26,7 +26,10 @@ impl ModelStore {
             .map_err(|error| error.into_napi(env))
     }
 
-    /// Capture SPARS_MODEL_DIR or the operating system's user cache directory.
+    /// The store in `SPARS_MODEL_DIR` (relative to the current directory), otherwise `spars/models`
+    /// inside the user cache directory (`~/Library/Caches` on macOS, `$XDG_CACHE_HOME` or `~/.cache`
+    /// on Linux, `%LOCALAPPDATA%` on Windows). Throws `SPARS_INVALID_MODEL` when `SPARS_MODEL_DIR`
+    /// is empty or no cache directory exists.
     #[napi(factory)]
     pub fn discover(env: Env) -> Result<Self> {
         spars::ModelStore::discover()
@@ -39,7 +42,8 @@ impl ModelStore {
         path_text(self.inner.root()).map_err(|error| error.into_napi(env))
     }
 
-    /// Resolve a registered model without downloading or reading its weights.
+    /// Resolve a registered model without downloading or reading its weights. Resolves to the
+    /// absolute path of the installation; rejects with `SPARS_IO` when `name` is not registered.
     #[napi(
         strict,
         ts_args_type = "name: ModelName",
@@ -52,7 +56,10 @@ impl ModelStore {
         })
     }
 
-    /// Select a direct child directory. This records selection; it does not validate model weights.
+    /// Select `installed` (relative to the current directory), which must be a directory directly
+    /// inside `root`, as the installation for `name`, replacing any earlier selection. This does not
+    /// validate model weights. Names use lowercase ASCII letters, digits and underscores, starting
+    /// with a letter, at most 128 bytes.
     #[napi(
         strict,
         ts_args_type = "name: ModelName, installed: string",

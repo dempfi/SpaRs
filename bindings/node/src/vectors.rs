@@ -6,15 +6,19 @@ use napi_derive::napi;
 
 #[napi]
 impl Model {
-    /// Return a copied mean vector using this model's static vectors, or the
-    /// document's contextual tensor when this model has no static vectors.
-    /// Unavailable vectors are an empty Float32Array.
+    /// Mean of the document's token vectors, as a copy, like spaCy `Doc.vector`. Uses this model's
+    /// static vectors, where tokens without a vector count as zeros. A model without static vectors,
+    /// such as en_core_web_sm, uses the document's contextual vectors instead. The result is empty
+    /// only when the model has no static vectors and the document has no contextual vectors, for
+    /// example after processing only through `Tokenizer`.
     #[napi(strict)]
     pub fn document_vector(&self, document: &NativeDocument) -> Float32Array {
         Float32Array::new(self.inner.document_vector(&document.inner))
     }
 
-    /// Return a copied token vector, or null when it is unavailable.
+    /// Copy of the token's vector: a static vector looked up by exact text, or the contextual vector
+    /// for a model without static vectors. Null when none exists (spaCy returns zeros instead).
+    /// Throws `SPARS_BOUNDS` for an invalid index.
     #[napi(strict)]
     pub fn token_vector(
         &self,
@@ -32,8 +36,10 @@ impl Model {
         })
     }
 
-    /// Return a copied mean vector for a checked half-open token interval.
-    /// Unavailable vectors are an empty Float32Array.
+    /// Mean vector of tokens `start` (inclusive) to `end` (exclusive), as a copy, chosen like
+    /// `documentVector`. The result is empty when the model has no static vectors and either the
+    /// document has no contextual vectors or the interval is empty; with static vectors an empty
+    /// interval gives a zero vector. Throws `SPARS_BOUNDS` unless `0 <= start <= end <= doc.length`.
     #[napi(strict)]
     pub fn span_vector(
         &self,
@@ -48,8 +54,9 @@ impl Model {
             .map_err(|error| errors::BindingError::from(error).into_napi(env))
     }
 
-    /// Cosine similarity of document mean vectors, with native identical-text
-    /// and zero-vector behavior. Both inputs use this model's vector selection.
+    /// Cosine similarity of the two document vectors, like spaCy `Doc.similarity`. Returns 1 when both
+    /// have the same token texts in order, and 0 when either vector is empty or all zeros. Throws
+    /// `SPARS_UNSUPPORTED` when both vectors are nonzero with different widths.
     #[napi(strict)]
     pub fn similarity(&self, env: Env, a: &NativeDocument, b: &NativeDocument) -> Result<f64> {
         check_dimensions(
@@ -69,7 +76,8 @@ impl Model {
         Ok(f64::from(self.inner.similarity(&a.inner, &b.inner)))
     }
 
-    /// Cosine similarity of two checked half-open token intervals.
+    /// Like `similarity`, for tokens `aStart` to `aEnd` of `a` and `bStart` to `bEnd` of `b`, with
+    /// exclusive ends. Throws `SPARS_BOUNDS` for an invalid interval.
     #[napi(strict)]
     #[allow(clippy::too_many_arguments)]
     pub fn span_similarity(

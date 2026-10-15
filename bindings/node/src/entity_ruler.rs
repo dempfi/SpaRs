@@ -15,7 +15,8 @@ pub struct EntityMatch {
     /// `annotate` adds no entity.
     #[napi(ts_type = "EntityLabel | ''")]
     pub label: String,
-    /// The pattern's ID, or `''` without one, as on entities.
+    /// The pattern's ID, or `''` without one. `annotate` gives the entity this ID only when it is
+    /// nonempty.
     pub id: String,
     #[napi(ts_type = "import('./units.js').TokenIndex")]
     pub start: u32,
@@ -23,7 +24,7 @@ pub struct EntityMatch {
     pub end: u32,
 }
 
-/// A pattern as `patterns` lists it, like an entry of spaCy's `EntityRuler.patterns`.
+// scripts/declarations.mts replaces this interface and documents it.
 #[napi(object)]
 pub struct RulerPattern {
     #[napi(ts_type = "EntityLabel | ''")]
@@ -93,10 +94,20 @@ impl Pattern {
 }
 
 /// Adds entities from token patterns and phrases, like spaCy's `entity_ruler` placed after the
-/// named-entity recognizer. It does not run inside a model's pipeline: call `annotate` on documents
-/// you have already processed, or processed with a stage before `Ner` to use it without the
-/// recognizer. Longer matches win, then earlier ones; of matches over exactly the same tokens, the
-/// rule added first wins. Documents are immutable: `annotate` returns a new document.
+/// named-entity recognizer. It does not run inside a model's pipeline: call `annotate` on a
+/// `NativeDocument` from `Model.processDocument` or `NativeDocument.fromSnapshot`; to use it without
+/// the recognizer, process with a stage before `Ner`. Longer matches win, then earlier ones. Of
+/// matches by different rules (label and ID pairs) over exactly the same tokens, the rule added
+/// first wins; spaCy leaves that tie to Python set order (see docs/ENTITY_RULER.md, "Differences
+/// from spaCy"). Documents are immutable: `annotate` returns a new document.
+///
+/// ```js
+/// const nlp = await loadModel('en_core_web_sm')
+/// const ruler = new EntityRuler()
+/// ruler.add([{ label: 'ORG', phrase: await nlp.processDocument('Acme Corp', 'Lemmatizer') }])
+/// const doc = await ruler.annotate(await nlp.processDocument('Acme Corp hired Alice.', 'Lemmatizer'))
+/// doc.toObject().entities // [{ start: 0, end: 2, label: 'ORG', id: '' }]
+/// ```
 #[napi]
 pub struct EntityRuler {
     inner: Arc<spars::EntityRuler>,
@@ -108,8 +119,8 @@ impl EntityRuler {
     /// lexical flags such as `IS_ALPHA` in token conditions and as `phraseAttribute`; only its
     /// lexical rules are used, and it is never run. Without one, adding a flag condition, or any
     /// phrase under a flag `phraseAttribute`, throws `SPARS_INVALID_PATTERN`. An empty
-    /// `idSeparator` throws `SPARS_INVALID_PATTERN`, an unknown `phraseAttribute`
-    /// `SPARS_UNSUPPORTED`, and an unknown option or a value of the wrong type `InvalidArg`.
+    /// `idSeparator` throws `SPARS_INVALID_PATTERN`, an `idSeparator` or `phraseAttribute` with an
+    /// unpaired surrogate `SPARS_INVALID_TEXT`, an unknown `phraseAttribute` `SPARS_UNSUPPORTED`, and an unknown option or a value of the wrong type `InvalidArg`.
     #[napi(
         constructor,
         ts_args_type = "options?: EntityRulerOptions | undefined | null, model?: Model | undefined | null"
@@ -197,8 +208,8 @@ impl EntityRuler {
     /// The current patterns, like spaCy's `patterns`: all token patterns, then all phrases as their
     /// document text. Within each kind, patterns with the same label and ID are listed together, in
     /// the order each pair first received a pattern of that kind; a pair removed and added again
-    /// moves to the end. `id` is absent for a pattern without an ID or with an empty one. The list
-    /// is rebuilt on every read.
+    /// moves to the end. `id` is absent for a pattern without an ID or with an empty one. Each read
+    /// returns a new array; changing it does not change the ruler.
     #[napi(getter, ts_return_type = "Array<RulerPattern>")]
     pub fn patterns(&self) -> Vec<RulerPattern> {
         self.inner
@@ -223,7 +234,8 @@ impl EntityRuler {
 
     /// Add patterns, like spaCy's `add_patterns`. Patterns with the same label and ID form one rule;
     /// duplicates are kept and counted by `size`. Every pattern is checked before any is added, so
-    /// a failure adds nothing. `SPARS_INVALID_PATTERN` is thrown for an unknown field, a `label` or
+    /// a failure adds nothing. `SPARS_INVALID_PATTERN` is thrown for a non-array argument, an
+    /// unknown field, a `phrase` that is not a `NativeDocument`, a `label` or
     /// `id` that is not a string, both or neither of `tokens` and `phrase`, an invalid token
     /// pattern, a lexical flag condition or flag-attribute phrase on a ruler created without a
     /// model, and a nonempty phrase document in which no token has the annotation
@@ -269,7 +281,9 @@ impl EntityRuler {
     /// with the ID, or when a label once used with it has no patterns left: as in spaCy, removed
     /// rules stay known until `clear`, so removing an ID twice fails, and so does removing an ID
     /// re-added under only some of its earlier labels. `remove('')` removes token patterns added
-    /// with an empty ID. Throws `SPARS_BUSY` while matching on this ruler is pending.
+    /// with an empty ID. Unlike spaCy, a rule with both token patterns and phrases loses both (see
+    /// docs/ENTITY_RULER.md, "Differences from spaCy"). An ID with an unpaired surrogate throws
+    /// `SPARS_INVALID_TEXT`. Throws `SPARS_BUSY` while matching on this ruler is pending.
     #[napi(strict)]
     pub fn remove(&mut self, env: Env, id: Utf16String) -> Result<()> {
         let id = errors::text(&id).map_err(|error| error.into_napi(env))?;
@@ -292,9 +306,10 @@ impl EntityRuler {
     /// Find candidate entities, like spaCy's `EntityRuler.match`, on Node's worker pool: token and
     /// phrase matches without empty ones and duplicates, longest first, then earliest, and matches
     /// over the same tokens in the order their rules were added. Matches may overlap one another
-    /// and existing entities; `annotate` applies that filtering. Rejects with `SPARS_BUSY` when
-    /// the inference queue is full and `SPARS_INPUT_LIMIT` when the document exceeds
-    /// `maxTextLength`.
+    /// and existing entities; `annotate` applies that filtering. Rejects with `SPARS_INFERENCE` when
+    /// a token condition's annotation is null on any document token, for example `lemma` before
+    /// `Lemmatizer`, and with `SPARS_BUSY` or `SPARS_INPUT_LIMIT` under `configureExecution` and
+    /// `configureInputLimits`. Throws `TypeError` when `doc` is not a `NativeDocument`.
     #[napi(strict, ts_return_type = "Promise<Array<EntityMatch>>")]
     pub fn find_matches(&self, doc: &NativeDocument) -> AsyncTask<EntityMatchTask> {
         AsyncTask::new(EntityMatchTask {
@@ -306,10 +321,11 @@ impl EntityRuler {
     /// Return a new document with the ruler's entities, like applying spaCy's ruler, on Node's
     /// worker pool; the given document and its views are unchanged. Matches are taken in
     /// `findMatches` order, overlapping ones are dropped, and existing entities are kept or
-    /// removed according to `overwriteEntities`. Entities get their pattern's label and ID. Every
-    /// token outside the resulting entities becomes outside (IOB `O`), including tokens with
-    /// missing or blocked annotation, even when nothing matches. A match with an empty label
-    /// claims its tokens but adds no entity. Rejects like `findMatches`.
+    /// removed according to `overwriteEntities`. Entities get their pattern's label. A pattern's
+    /// nonempty ID is written to the entity and its tokens; without one, the tokens keep their
+    /// current `entityId`, as in spaCy. Every token outside the resulting entities becomes outside
+    /// (IOB `O`), including tokens with missing or blocked annotation, even when nothing matches. A
+    /// match with an empty label claims its tokens but adds no entity. Rejects like `findMatches`.
     #[napi(strict, ts_return_type = "Promise<NativeDocument>")]
     pub fn annotate(&self, doc: &NativeDocument) -> AsyncTask<AnnotateTask> {
         AsyncTask::new(AnnotateTask {

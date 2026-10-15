@@ -7,6 +7,7 @@ use napi::{
 use napi_derive::napi;
 use std::sync::Arc;
 
+/// A match of `rule` covering tokens `start` (inclusive) to `end` (exclusive).
 #[napi(object)]
 pub struct PhraseMatch {
     pub rule: String,
@@ -96,6 +97,7 @@ pub(crate) fn attribute(name: Option<&str>) -> errors::Result<spars::PhraseAttri
         })
 }
 
+/// Finds exact token sequences taken from example documents, like spaCy's `PhraseMatcher`.
 #[napi]
 pub struct PhraseMatcher {
     inner: Arc<spars::PhraseMatcher>,
@@ -103,9 +105,10 @@ pub struct PhraseMatcher {
 
 #[napi]
 impl PhraseMatcher {
-    /// Match exact token text using ORTH (default) or TEXT, pinned Unicode LOWER, NORM, the
-    /// LEMMA, POS, TAG, DEP and MORPH annotations, a lexical flag such as IS_ALPHA, or LENGTH.
-    /// Pass a model to enable lexical flag attributes with its language rules.
+    /// Compare tokens by `attribute` (default `ORTH`, the exact text), spelled as in spaCy. Lexical
+    /// flags such as `IS_ALPHA` compare `true`/`false` with `model`'s language rules; without a
+    /// model, `add` throws `SPARS_INVALID_PATTERN`. `LENGTH` compares code-point counts. Throws
+    /// `SPARS_UNSUPPORTED` for an unknown attribute.
     #[napi(
         constructor,
         ts_args_type = "attribute?: PhraseAttribute | undefined | null, model?: Model | undefined | null"
@@ -136,6 +139,7 @@ impl PhraseMatcher {
         attribute_name(self.inner.attribute())
     }
 
+    /// Number of rules, like spaCy `len(matcher)`.
     #[napi(getter)]
     pub fn size(&self, env: Env) -> Result<u32> {
         errors::number(self.inner.len()).map_err(|error| error.into_napi(env))
@@ -147,7 +151,9 @@ impl PhraseMatcher {
         Ok(self.inner.contains(&rule))
     }
 
-    /// Return owned unique nonempty patterns of compared token values in registration order.
+    /// Each pattern's compared token values (for example lowercased text for `LOWER`,
+    /// `'true'`/`'false'` for flags), unique and nonempty, in the order first added; null when `rule`
+    /// is not registered.
     #[napi(strict)]
     pub fn get(&self, env: Env, rule: Utf16String) -> Result<Option<Vec<Vec<String>>>> {
         let rule = errors::text(&rule).map_err(|error| error.into_napi(env))?;
@@ -159,7 +165,12 @@ impl PhraseMatcher {
         }))
     }
 
-    /// Copy the compared pattern token values into the trie. Pending searches prevent mutation.
+    /// Add example documents, processed far enough to carry the compared annotation, as patterns for
+    /// `rule`. Adding to an existing rule appends; duplicates and empty documents add no pattern.
+    /// Everything is checked before the matcher changes. Throws `SPARS_INVALID_PATTERN` when a
+    /// `LEMMA`, `POS`, `TAG`, `DEP` or `MORPH` document has no annotated token, or for a flag
+    /// attribute without a model; `SPARS_UNSUPPORTED` for `MORPH` values not in spaCy's canonical
+    /// order; and `SPARS_BUSY` while `findMatches` is pending.
     #[napi(strict)]
     pub fn add(
         &mut self,
@@ -178,6 +189,7 @@ impl PhraseMatcher {
             .map_err(|error| errors::registration(error).into_napi(env))
     }
 
+    /// Throws `SPARS_INVALID_PATTERN` for an unregistered rule and `SPARS_BUSY` while `findMatches` is pending.
     #[napi(strict)]
     pub fn remove(&mut self, env: Env, rule: Utf16String) -> Result<()> {
         let rule = errors::text(&rule).map_err(|error| error.into_napi(env))?;
@@ -187,7 +199,11 @@ impl PhraseMatcher {
             .map_err(|error| errors::BindingError::from(error).into_napi(env))
     }
 
-    /// Return all overlapping matches in native reference order on Node's worker pool.
+    /// Find every occurrence of every pattern on Node's worker pool, including overlapping ones, like
+    /// spaCy's `PhraseMatcher`. Results are sorted by `start`, then `end`; matches of several rules
+    /// on the same span keep spaCy's order. Rejects with `SPARS_UNSUPPORTED` for `MORPH` values not in
+    /// spaCy's canonical order, and with `SPARS_BUSY` or `SPARS_INPUT_LIMIT` under
+    /// `configureExecution` and `configureInputLimits`.
     #[napi(strict, ts_return_type = "Promise<Array<PhraseMatch>>")]
     pub fn find_matches(&self, doc: &NativeDocument) -> AsyncTask<PhraseMatchTask> {
         AsyncTask::new(PhraseMatchTask {

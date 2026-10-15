@@ -22,7 +22,9 @@ use napi_derive::napi;
 use std::sync::Arc;
 use tasks::{BatchTask, LoadTask, ProcessDocumentTask, ProcessTask};
 
-/// An ordered prefix of the pipeline. Later annotations remain null.
+/// The last pipeline component to run, inclusive. Earlier components in the model's order also run,
+/// and annotations from later ones stay null. `Tokenizer` runs no component. Processing throws
+/// `SPARS_UNSUPPORTED` when the model's pipeline lacks the component.
 #[napi(string_enum)]
 pub enum Stage {
     Tokenizer,
@@ -62,25 +64,33 @@ impl Model {
         self.max_length
     }
 
+    /// Longer texts reject with `SPARS_TEXT_TOO_LONG`. Set an integer from 0 to 4294967295, only
+    /// while no inference is running.
     #[napi(setter)]
     pub fn set_max_length(&mut self, value: f64) -> Result<()> {
         self.max_length = setting(value, 0, "maxLength")?;
         Ok(())
     }
 
-    /// Number of documents buffered by pipe and each native processBatch chunk.
+    /// Number of documents buffered by `pipe` and passed to each native `processBatch` chunk.
+    /// Defaults to the model's configured `batch_size`.
     #[napi(getter)]
     pub fn batch_size(&self) -> u32 {
         self.batch_size
     }
 
+    /// Set a positive integer, only while no inference is running.
     #[napi(setter)]
     pub fn set_batch_size(&mut self, value: f64) -> Result<()> {
         self.batch_size = setting(value, 1, "batchSize")?;
         Ok(())
     }
 
-    /// Run native inference on Node's worker pool. Defaults to the full pipeline.
+    /// Process `text` on Node's worker pool and return a plain `Document`. Omitting `stage` runs
+    /// through `Ner`. Rejects with `SPARS_TEXT_TOO_LONG` when the text has more than `maxLength` code
+    /// points, `SPARS_INVALID_TEXT` for an unpaired surrogate, and `SPARS_BUSY` or `SPARS_INPUT_LIMIT`
+    /// under `configureExecution` and `configureInputLimits`. Throws `TypeError` for a non-string
+    /// text or an unknown stage.
     #[napi(strict)]
     pub fn process(&self, text: Utf16String, stage: Option<Stage>) -> AsyncTask<ProcessTask> {
         AsyncTask::new(ProcessTask {
@@ -91,7 +101,8 @@ impl Model {
         })
     }
 
-    /// Retain an immutable native document for matching, views, and snapshots.
+    /// Like `process`, but returns a `NativeDocument` for matchers, token and span views, vectors,
+    /// `withEntities` and snapshots.
     #[napi(strict)]
     pub fn process_document(
         &self,
@@ -106,7 +117,9 @@ impl Model {
         })
     }
 
-    /// Process an ordered batch, chunked by batchSize by the package wrapper.
+    /// Process several texts and return documents in input order. Texts are processed in chunks of
+    /// `batchSize`; one failing text rejects the whole call. `configureInputLimits` checks
+    /// `maxBatchSize` and `maxBatchTextLength` before any work starts.
     #[napi(strict)]
     pub fn process_batch(
         &self,
@@ -121,7 +134,8 @@ impl Model {
         })
     }
 
-    /// Return an independent copy of a static vector, or null when no row exists.
+    /// Copy of the static vector for `word`, looked up by exact text, or null when no row exists.
+    /// Always null for models without static vectors, such as en_core_web_sm.
     #[napi(strict)]
     pub fn vector(&self, env: Env, word: Utf16String) -> Result<Either<Float32Array, Null>> {
         let word = errors::text(&word).map_err(|error| error.into_napi(env))?;
@@ -132,7 +146,17 @@ impl Model {
     }
 }
 
-/// Load and validate an installed model on Node's worker pool. No network access.
+/// Load an installed model on Node's worker pool, without network access. A value containing `/` or
+/// `\`, or equal to `.` or `..`, is a model directory relative to the current directory. Any other
+/// value is a name registered by `downloadModel` or `ModelStore.register`, looked up in
+/// `options.path`, otherwise in `SPARS_MODEL_DIR` or the user cache. When `options.path` is given,
+/// the value is always a name. Rejects with `SPARS_IO` when the model is not installed,
+/// `SPARS_INVALID_MODEL` for invalid names or files, and `SPARS_UNSUPPORTED` for unsupported
+/// pipelines.
+///
+/// ```js
+/// const nlp = await loadModel('en_core_web_sm')
+/// ```
 #[napi(
     strict,
     ts_args_type = "path: ModelName, options?: LoadOptions | undefined | null"
@@ -144,8 +168,8 @@ pub fn load_model(path: Utf16String, options: Option<models::LoadOptions>) -> As
 }
 
 /// Bytes of external memory reported through Node-API to this JavaScript thread's V8 isolate,
-/// including the documents SpaRs holds. V8 counts it when deciding to collect garbage; on Node 24
-/// `process.memoryUsage().external` does not include it.
+/// including the documents SpaRs holds. V8 counts it when deciding to collect garbage. The value is
+/// an estimate and a lower bound: token and span views that outlive their document are not counted.
 #[napi]
 pub fn reported_native_memory(env: Env) -> Result<f64> {
     // Adjusting by zero reads the running total without changing it. This relies on V8's

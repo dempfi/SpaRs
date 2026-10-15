@@ -14,30 +14,54 @@ export function restrictConstructor(source: string, name = 'Model'): string {
 }
 
 const executionTypes = `
-/** Inference admission limits shared by models in this package instance and JS isolate. */
+/**
+ * Limits on concurrent native work for every model, matcher and entity ruler in this JavaScript
+ * thread. They cover \`process\`, \`processDocument\`, \`processBatch\`, \`pipe\`, \`findMatches\` and
+ * \`EntityRuler.annotate\`, but not \`loadModel\` or \`downloadModel\`.
+ */
 export interface ExecutionOptions {
+  /** Calls running on Node's worker pool at once; a positive integer. */
   maxActive: number
+  /** Further calls that wait in order once \`maxActive\` are running; 0 or more. When this many are waiting, new calls reject with \`SPARS_BUSY\`. */
   maxQueued: number
 }
-/** Configure admission while idle. Defaults to 2 active and 32 queued; null restores these defaults. */
+/**
+ * Configure execution limits. Defaults to 2 active and 32 queued; null restores these defaults.
+ * Throws a plain \`Error\` while any call is running or queued, and \`RangeError\` for invalid values.
+ */
 export declare function configureExecution(options: ExecutionOptions | null): void
-/** Text lengths count UTF-16 units, matching JavaScript string.length. */
+/**
+ * Optional caps for untrusted input, checked before native work starts; exceeding one rejects with
+ * \`SPARS_INPUT_LIMIT\`. Lengths count UTF-16 units (\`string.length\`). All fields are positive integers.
+ */
 export interface InputLimits {
+  /** Per text in \`process\`, \`processDocument\` and \`processBatch\`, and per document (\`utf16Length\`) in \`findMatches\` and \`EntityRuler.annotate\`. */
   maxTextLength: number
+  /** Texts per \`processBatch\` call. */
   maxBatchSize: number
+  /** Total length of the texts in one \`processBatch\` call. */
   maxBatchTextLength: number
 }
-/** Enable additional server input limits while idle. Disabled by default; null resets them. */
+/**
+ * Set input limits in addition to \`Model.maxLength\`. Disabled by default; null removes them. Throws a
+ * plain \`Error\` while any call is running or queued.
+ */
 export declare function configureInputLimits(options: InputLimits | null): void
 export interface PipeOptions {
+  /** Texts per \`processBatch\` call; defaults to \`model.batchSize\`. */
   batchSize?: number
+  /** Defaults to the full pipeline (through \`Ner\`). */
   stage?: Stage | null
 }
 export interface Model {
-  /** Lazily buffer and yield documents in order; native inference stays sequential within a batch. */
+  /** Process an iterable of texts lazily, yielding documents in input order. Each \`batchSize\` texts go to one \`processBatch\` call, so its errors and limits apply. */
   pipe(texts: Iterable<string> | AsyncIterable<string>, options?: PipeOptions): AsyncGenerator<Document, void, unknown>
 }
-/** Whether a value is an error raised by this package, narrowing its \`code\`. */
+/**
+ * Whether \`error\` is an \`Error\` whose \`code\` is a \`SparsErrorCode\`, narrowing its \`code\`. Argument
+ * errors (\`TypeError\`, \`RangeError\`, or Node-API codes such as \`InvalidArg\`) and the plain \`Error\`
+ * thrown when changing settings during inference return false.
+ */
 export declare function isSparsError(error: unknown): error is SparsError
 /** Whether a name is an official pipeline that \`downloadModel\` can install. */
 export declare function isOfficialModelName(name: string): name is OfficialModelName
@@ -132,7 +156,7 @@ interface EntityPatternBase {
   /** The label of matched entities. An empty label is accepted, as in spaCy: its matches claim their tokens and remove overwritten entities, but add no entity. */
   label: EntityLabel | ''
   /**
-   * Written to matched entities and their tokens, and the key for \`EntityRuler.remove\`, which removes the ID's patterns under every label. Without one, matched entities have \`id\` \`''\`.
+   * Written to the entities this pattern's accepted matches create and to their tokens' \`entityId\`, and the key for \`EntityRuler.remove\`, which removes the ID's patterns under every label. Without one, as in spaCy, each matched token keeps its current \`entityId\`, so the entity reports its first token's earlier ID, which is \`''\` unless \`withEntities\` or an earlier \`annotate\` set one.
    * On a phrase, \`''\` is the same as no ID. On a token pattern, \`''\` also gives matches no ID, but as in spaCy \`EntityRuler.ids\` lists \`''\` and \`remove('')\` removes the pattern.
    */
   id?: string

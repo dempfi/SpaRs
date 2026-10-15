@@ -16,15 +16,20 @@ pub struct TokenRepetition {
     pub min: Option<f64>,
     pub max: Option<f64>,
 }
+/// Conditions that one token must all satisfy (empty matches any token), and how many consecutive
+/// tokens the item consumes.
 #[napi(object)]
 pub struct TokenPatternItem {
     pub constraints: Vec<TokenConstraint>,
     pub repetition: TokenRepetition,
 }
+/// Items matched against consecutive tokens, like one pattern list in spaCy `Matcher.add`; must not
+/// be empty.
 #[napi(object)]
 pub struct TokenPattern {
     pub tokens: Vec<TokenPatternItem>,
 }
+/// A match of `rule` covering tokens `start` (inclusive) to `end` (exclusive).
 #[napi(object)]
 pub struct TokenMatch {
     pub rule: String,
@@ -120,6 +125,7 @@ impl TokenPattern {
     }
 }
 
+/// Finds token sequences described by per-token conditions, like spaCy's `Matcher`.
 #[napi]
 pub struct TokenMatcher {
     inner: Arc<spars::TokenMatcher>,
@@ -137,6 +143,7 @@ impl TokenMatcher {
             inner: Arc::new(matcher),
         }
     }
+    /// Number of rules, like spaCy `len(matcher)`.
     #[napi(getter)]
     pub fn size(&self, env: Env) -> Result<u32> {
         errors::number(self.inner.len()).map_err(|error| error.into_napi(env))
@@ -146,6 +153,7 @@ impl TokenMatcher {
         let rule = errors::text(&rule).map_err(|error| error.into_napi(env))?;
         Ok(self.inner.contains(&rule))
     }
+    /// Patterns of `rule` in addition order, or null when `rule` is not registered.
     #[napi(strict)]
     pub fn get(&self, env: Env, rule: Utf16String) -> Result<Option<Vec<TokenPattern>>> {
         let rule = errors::text(&rule).map_err(|error| error.into_napi(env))?;
@@ -154,6 +162,10 @@ impl TokenMatcher {
             .get(&rule)
             .map(|patterns| patterns.iter().map(TokenPattern::from_native).collect()))
     }
+    /// Append patterns to `rule`; all are validated before the matcher changes. Throws
+    /// `SPARS_INVALID_PATTERN` for an empty pattern, invalid predicates or repetition bounds, a
+    /// pattern expanding beyond 4096 token positions, or flag conditions without a model, and
+    /// `SPARS_BUSY` while `findMatches` is pending.
     #[napi(strict)]
     pub fn add(&mut self, env: Env, rule: Utf16String, patterns: Vec<TokenPattern>) -> Result<()> {
         let rule = errors::text(&rule).map_err(|error| error.into_napi(env))?;
@@ -167,6 +179,7 @@ impl TokenMatcher {
             .add(rule, patterns)
             .map_err(|error| errors::BindingError::from(error).into_napi(env))
     }
+    /// Throws `SPARS_INVALID_PATTERN` for an unregistered rule and `SPARS_BUSY` while `findMatches` is pending.
     #[napi(strict)]
     pub fn remove(&mut self, env: Env, rule: Utf16String) -> Result<()> {
         let rule = errors::text(&rule).map_err(|error| error.into_napi(env))?;
@@ -175,6 +188,11 @@ impl TokenMatcher {
             .remove(&rule)
             .map_err(|error| errors::BindingError::from(error).into_napi(env))
     }
+    /// All matches on Node's worker pool, overlapping ones included, each rule, start and end once,
+    /// in spaCy `Matcher` order rather than sorted by `start`. Rejects with `SPARS_INFERENCE` when a
+    /// condition's annotation is null on any document token, for example `pos` before
+    /// `AttributeRuler`, and with `SPARS_BUSY` or `SPARS_INPUT_LIMIT` under `configureExecution` and
+    /// `configureInputLimits`.
     #[napi(strict, ts_return_type = "Promise<Array<TokenMatch>>")]
     pub fn find_matches(&self, doc: &NativeDocument) -> AsyncTask<TokenMatchTask> {
         AsyncTask::new(TokenMatchTask {
