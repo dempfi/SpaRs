@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.4.0](https://github.com/tareksanger/SpaRs/compare/v0.3.0...v0.4.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* store spaCy entity IDs on tokens and entities ([#96](https://github.com/tareksanger/SpaRs/issues/96))
+* **node:** type fixed vocabularies as literal unions ([#88](https://github.com/tareksanger/SpaRs/issues/88))
+
+### Features
+
+* add a native EntityRuler ([#97](https://github.com/tareksanger/SpaRs/issues/97)) ([71fdfa4](https://github.com/tareksanger/SpaRs/commit/71fdfa489e9d6ecabede42b012141ba72769671f))
+* add checked entity annotation updates ([#87](https://github.com/tareksanger/SpaRs/issues/87)) ([1dafc82](https://github.com/tareksanger/SpaRs/commit/1dafc82566da99c7d537fe812ff936c735cfcb25))
+* add IS_SUBSET, IS_SUPERSET and INTERSECTS set predicates to matchers ([#81](https://github.com/tareksanger/SpaRs/issues/81)) ([8d904cd](https://github.com/tareksanger/SpaRs/commit/8d904cd15a11777f87cdd77945319c759bd1882f))
+* add LENGTH conditions with numeric comparisons to matchers ([#79](https://github.com/tareksanger/SpaRs/issues/79)) ([f8a1458](https://github.com/tareksanger/SpaRs/commit/f8a1458c58a883a25f873b9042199c0cdb944320))
+* add lexical flag and LENGTH attributes to PhraseMatcher ([#85](https://github.com/tareksanger/SpaRs/issues/85)) ([1f9270b](https://github.com/tareksanger/SpaRs/commit/1f9270ba0c95814adb32b00bb11e3c71260a616f))
+* add lexical flag conditions to token and dependency matchers ([#76](https://github.com/tareksanger/SpaRs/issues/76)) ([597ddb4](https://github.com/tareksanger/SpaRs/commit/597ddb407de2e9e33da94776167fafa135601fd9))
+* add NORM, LEMMA, POS, TAG, DEP and MORPH attributes to PhraseMatcher ([#84](https://github.com/tareksanger/SpaRs/issues/84)) ([8f4a961](https://github.com/tareksanger/SpaRs/commit/8f4a9612c310023e6073a10e9fa0b8432cefded6))
+* add remaining lexical flag conditions to matchers ([#80](https://github.com/tareksanger/SpaRs/issues/80)) ([ad9266e](https://github.com/tareksanger/SpaRs/commit/ad9266e97a4125e2a0e146893c45de67426dce00))
+* add span groups to Rust documents ([#111](https://github.com/tareksanger/SpaRs/issues/111)) ([aaab96c](https://github.com/tareksanger/SpaRs/commit/aaab96cccbce4b2c193b15ce3b921b60b60478af))
+* add the SpanRuler to Rust documents ([#114](https://github.com/tareksanger/SpaRs/issues/114)) ([5065c1d](https://github.com/tareksanger/SpaRs/commit/5065c1dd78e051b598a82e355e53531fd0740dbd))
+* add Unicode LOWER conditions to token and dependency matchers ([#74](https://github.com/tareksanger/SpaRs/issues/74)) ([af3dd1b](https://github.com/tareksanger/SpaRs/commit/af3dd1b8dcdc1a9e3dd91ddde3919587633d8a0c))
+* **node:** add EntityRuler ([#109](https://github.com/tareksanger/SpaRs/issues/109)) ([74267d9](https://github.com/tareksanger/SpaRs/commit/74267d97fd78c12904220cced0245dd440d8a5fb))
+* **node:** add span groups to native documents ([#113](https://github.com/tareksanger/SpaRs/issues/113)) ([48683da](https://github.com/tareksanger/SpaRs/commit/48683daa71f17689172be93ddc30bcd50ee64cc9))
+* **node:** add the SpanRuler to native documents ([#123](https://github.com/tareksanger/SpaRs/issues/123)) ([ec1b72d](https://github.com/tareksanger/SpaRs/commit/ec1b72dbdc16ec74b7a02d5b5e4ddbf5024a8ae9))
+* **node:** type fixed vocabularies as literal unions ([#88](https://github.com/tareksanger/SpaRs/issues/88)) ([525734e](https://github.com/tareksanger/SpaRs/commit/525734edefdbe5c3cba271865f347be00e39254b))
+* store spaCy entity IDs on tokens and entities ([#96](https://github.com/tareksanger/SpaRs/issues/96)) ([20e113c](https://github.com/tareksanger/SpaRs/commit/20e113ceaeee7ebf0789bf79b762318152ae4f7b))
+
+
+### Bug Fixes
+
+* match spaCy morphology field order and POS alias folding ([#82](https://github.com/tareksanger/SpaRs/issues/82)) ([ab5f186](https://github.com/tareksanger/SpaRs/commit/ab5f18638180da2a4c561ad7a33f6d057e0ad98c))
+* **matcher:** require annotations only where spaCy's E155 does ([#121](https://github.com/tareksanger/SpaRs/issues/121)) ([d96508f](https://github.com/tareksanger/SpaRs/commit/d96508f580c3923e179f89573271a708814ad198))
+* reject snapshots whose entities spaCy could not read from the tags ([#122](https://github.com/tareksanger/SpaRs/issues/122)) ([1efe719](https://github.com/tareksanger/SpaRs/commit/1efe7193e2d4ba2fb226a8467f6a89f36ad09cea))
+
+
+### Performance Improvements
+
+* index token patterns by their first token ([#112](https://github.com/tareksanger/SpaRs/issues/112)) ([da09a96](https://github.com/tareksanger/SpaRs/commit/da09a960b5ff0bd3c3ef38bc667c99a5962bcb00))
+
 ## [0.3.0](https://github.com/tareksanger/SpaRs/compare/v0.2.0...v0.3.0) (2026-09-28)
 
 
