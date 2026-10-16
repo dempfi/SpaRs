@@ -93,6 +93,10 @@ fn estimate_counts_every_owned_allocation() {
     // Each kind of allocation contributes: removing it lowers the estimate by its size.
     let full = snapshot(100, 0);
     let full_bytes = doc(&full).clone().estimated_heap_bytes();
+    let first_entity = &full["document"]["entities"][0];
+    let entity_bytes = std::mem::size_of::<spars::Span>()
+        + first_entity["label"].as_str().unwrap().len()
+        + first_entity["id"].as_str().map_or(0, str::len);
     for name in STRINGS.iter().skip(1) {
         let mut without = full.clone();
         for token in without["document"]["tokens"].as_array_mut().unwrap() {
@@ -106,6 +110,12 @@ fn estimate_counts_every_owned_allocation() {
                 removed += id.as_str().unwrap().len();
             }
         }
+        // Without an IOB tag or an entity type the tags describe no entities, so the snapshot
+        // stores none either.
+        if matches!(*name, "entity_iob" | "entity_type") {
+            without["document"]["entities"] = json!([]);
+            removed += 100 * entity_bytes;
+        }
         assert_eq!(
             doc(&without).clone().estimated_heap_bytes(),
             full_bytes - removed,
@@ -115,10 +125,17 @@ fn estimate_counts_every_owned_allocation() {
     for name in ["entities", "noun_chunks"] {
         let mut without = full.clone();
         without["document"][name] = Value::Null;
+        // Without a list every tag must be missing, so the IOB tags go too; types may stay.
+        let mut tags = 0;
+        if name == "entities" {
+            for token in without["document"]["tokens"].as_array_mut().unwrap() {
+                tags += token["entity_iob"].take().as_str().unwrap().len();
+            }
+        }
         let first = &full["document"][name][0];
         let strings =
             first["label"].as_str().unwrap().len() + first["id"].as_str().map_or(0, str::len);
-        let removed = 100 * (std::mem::size_of::<spars::Span>() + strings);
+        let removed = 100 * (std::mem::size_of::<spars::Span>() + strings) + tags;
         assert_eq!(
             doc(&without).clone().estimated_heap_bytes(),
             full_bytes - removed,

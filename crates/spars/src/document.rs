@@ -271,7 +271,20 @@ impl Doc {
             &serde_json::json!({"format_version": version, "document": self}),
         )?)
     }
-    /// Restore a snapshot after validating offsets, token indices and spans.
+    /// Restore a [`Doc::to_json`] snapshot after validating it.
+    ///
+    /// The entity list must be the one spaCy's `Doc.ents` reads from the token IOB tags, types and
+    /// IDs. It may be absent only when every IOB tag is missing; `entities()` then returns `None`
+    /// for an absent list and `Some(&[])` for `[]`. Returns [`Error::Model`] for an IOB tag other
+    /// than `B`, `I`, `O` or empty, a POS tag outside spaCy's universal set, an entity without a
+    /// label, a sentence with a label, a noun chunk not labeled `NP`, an empty entity ID or one that
+    /// differs from its first token's, a tensor whose shape does not match the tokens or that holds
+    /// a non-finite value, an `I` tag with no entity to continue (spaCy's E093), or an entity list
+    /// other than the one the tags describe. Returns [`Error::Bounds`] for token offsets that do not
+    /// cover the text in order, a `whitespace` flag without a following space, a head past the last
+    /// token, or spans that are empty, overlapping, out of order or past the end;
+    /// [`Error::Unsupported`] for a format version other than 1 to 3, contextual vectors in version
+    /// 1 or entity IDs before version 3; and [`Error::Json`] for malformed JSON or a missing field.
     pub fn from_json(json: &str) -> Result<Self> {
         #[derive(Deserialize)]
         struct Snapshot {
@@ -416,6 +429,28 @@ impl Doc {
                     ));
                 }
             }
+        }
+        // spaCy always reads `doc.ents` from the token tags, so a stored list must be what they
+        // give. A list is absent only without entity annotation, which `entities()` reports as
+        // `None`; an empty list is also accepted then, as spaCy's `doc.ents` is an empty tuple
+        // either way and reference fixtures store `[]` for unannotated documents. IOB spellings
+        // and bounds were checked above.
+        let derived = entities::entities_from_tags(&s.tokens).map_err(|error| match error {
+            Error::Unsupported(_) => Error::Model(
+                "snapshot entity IOB tags must not have an I with no entity to continue".into(),
+            ),
+            other => other,
+        })?;
+        let annotated = s
+            .tokens
+            .iter()
+            .any(|t| !matches!(t.entity_iob.as_deref(), None | Some("")));
+        if (annotated && s.entities.is_none())
+            || s.entities.as_deref().unwrap_or_default() != derived
+        {
+            return Err(Error::Model(
+                "snapshot entities must be the ones the token IOB tags and types describe".into(),
+            ));
         }
         Ok(Self {
             text: s.text,

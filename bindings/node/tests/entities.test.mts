@@ -153,13 +153,18 @@ test('withEntities rejects invalid intervals, defaults and labels', async () => 
   }
 });
 
-test('withEntities and snapshots reject tags that spaCy could not read', () => {
+test('snapshots reject entity tags and lists that spaCy could not read', () => {
   const token = (iob: string | null, start: number) => ({ start, end: start + 1, idx: start, whitespace: false, norm: 'a', tag: null, pos: null,
     morphology: null, lemma: null, head: null, dep: null, sentence_start: null, entity_iob: iob, entity_type: iob === null ? null : 'X' });
   const snapshot = (first: string): string => JSON.stringify({ format_version: 1, document: { text: 'aa', tokens: [token(first, 0), token(null, 1)], entities: null } });
-  // An I with no entity to continue is a valid tag, but spaCy could not read the entity list.
-  const doc = NativeDocument.fromSnapshot(snapshot('I'));
-  assert.throws(() => doc.withEntities({ entities: [{ start: 1, end: 2, label: 'Y' }], default: 'unmodified' }), { code: 'SPARS_UNSUPPORTED' });
-  // A tag outside B, I, O and empty is rejected when the snapshot is read.
-  assert.throws(() => NativeDocument.fromSnapshot(snapshot('X')), { code: 'SPARS_INVALID_MODEL' });
+  // A tag outside B, I, O and empty, or an I with no entity to continue (spaCy's E093 when it reads
+  // the entity list), is rejected when the snapshot is read.
+  for (const first of ['X', 'I']) assert.throws(() => NativeDocument.fromSnapshot(snapshot(first)), { code: 'SPARS_INVALID_MODEL' });
+  // spaCy derives the entity list from the tags, so the stored list must be the one they describe, and present when the tags hold annotation.
+  const listed = (first: string | null): string => JSON.stringify({ format_version: 1, document: { text: 'aa', tokens: [token(first, 0), token(null, 1)],
+    entities: [{ start: 0, end: 1, label: 'X' }] } });
+  // A first-token I is rejected even when the list is the one a repair to B would give.
+  assert.throws(() => NativeDocument.fromSnapshot(listed('I')), { code: 'SPARS_INVALID_MODEL', message: /no entity to continue/ });
+  for (const invalid of [listed(null), snapshot('B')]) assert.throws(() => NativeDocument.fromSnapshot(invalid), { code: 'SPARS_INVALID_MODEL' });
+  assert.deepEqual(NativeDocument.fromSnapshot(listed('B')).toObject().entities, [{ start: 0, end: 1, label: 'X', id: '' }]);
 });

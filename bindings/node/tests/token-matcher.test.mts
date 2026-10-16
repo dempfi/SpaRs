@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { loadModel, NativeDocument, TokenMatcher } from '../index.js';
-import { modelPath } from './fixtures.mts';
+import { entitiesFromTags, modelPath, referenceTokens } from './fixtures.mts';
 import type { TokenPattern, TokenConstraint, TokenRepetition } from '../index.js';
 import { recordedConstraint, repetition } from './vocabulary.mts';
 import type { Recorded } from './vocabulary.mts';
@@ -77,7 +77,7 @@ for (const [filename, cases, rules, matches, untyped] of [
     let matchCount = 0;
     for (const item of items) {
       const matcher = new TokenMatcher();
-      const doc = NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: item }));
+      const doc = NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: { ...item, entities: entitiesFromTags(referenceTokens(item.tokens)) } }));
       for (const raw of array(item.rules)) {
         const rule = record(raw);
         outOfVocabulary += addRecorded(matcher, string(rule.name), array(rule.patterns).map(pattern));
@@ -111,7 +111,7 @@ test('TokenMatcher lexical flags match the frozen official suite with a model le
   let matchCount = 0;
   for (const item of items) {
     const matcher = new TokenMatcher(model);
-    const doc = NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: item }));
+    const doc = NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: { ...item, entities: entitiesFromTags(referenceTokens(item.tokens)) } }));
     for (const raw of array(item.rules)) {
       const rule = record(raw);
       outOfVocabulary += addRecorded(matcher, string(rule.name), array(rule.patterns).map(pattern));
@@ -157,7 +157,7 @@ test('TokenMatcher remaining lexical flags match the frozen official suite', asy
   let matchCount = 0;
   for (const item of items) {
     const matcher = new TokenMatcher(model);
-    const doc = NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: item }));
+    const doc = NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: { ...item, entities: entitiesFromTags(referenceTokens(item.tokens)) } }));
     for (const raw of array(item.rules)) {
       const rule = record(raw);
       outOfVocabulary += addRecorded(matcher, string(rule.name), array(rule.patterns).map(pattern));

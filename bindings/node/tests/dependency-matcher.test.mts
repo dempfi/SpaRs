@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DependencyMatcher, loadModel, NativeDocument } from '../index.js';
 import type { DependencyPattern, DependencyNode } from '../index.js';
-import { array, modelPath, readJson, record, root } from './fixtures.mts';
+import { array, entitiesFromTags, modelPath, readJson, record, referenceTokens, root } from './fixtures.mts';
 import { recordedConstraint, relation } from './vocabulary.mts';
 import type { Recorded } from './vocabulary.mts';
 
@@ -40,7 +40,7 @@ function addRecorded(matcher: DependencyMatcher, rule: string, patterns: Recorde
 function document(value: unknown): NativeDocument {
   const c = record(value);
   return NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: {
-    text: c.text, tokens: c.tokens, sentences: c.sentences, entities: c.entities, noun_chunks: c.noun_chunks,
+    text: c.text, tokens: c.tokens, sentences: c.sentences, entities: entitiesFromTags(referenceTokens(c.tokens)), noun_chunks: c.noun_chunks,
   } }));
 }
 const singleton: DependencyPattern = { nodes: [{ id: 'a', constraints: [] }] };

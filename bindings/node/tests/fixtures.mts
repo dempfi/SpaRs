@@ -45,6 +45,28 @@ function spans(value: unknown): ReferenceSpan[] | null {
     return { start: number(s.start), end: number(s.end), label: string(s.label) };
   }));
 }
+/** Recorded tokens, checked field by field. */
+export function referenceTokens(value: unknown): ReferenceToken[] { return array(value).map(token); }
+/**
+ * The entities spaCy's `doc.ents` reads from recorded tags: a `B` tag with a type starts an entity and `I` tags continue it.
+ * The token and dependency matcher generators record the pipeline's tags but write `[]` in place of the entity list, which
+ * `fromSnapshot` rejects when the tags describe entities.
+ */
+export function entitiesFromTags(tokens: ReferenceToken[]): ReferenceSpan[] {
+  const spans: ReferenceSpan[] = [];
+  let open: number | null = null;
+  const close = (end: number): void => {
+    if (open !== null) spans.push({ start: open, end, label: tokens[open]?.entity_type ?? '' });
+    open = null;
+  };
+  tokens.forEach((t, i) => {
+    if (t.entity_iob === 'I') return;
+    close(i);
+    if (t.entity_iob === 'B' && t.entity_type) open = i;
+  });
+  close(tokens.length);
+  return spans;
+}
 export function readJson(path: string): unknown { return JSON.parse(readFileSync(path, 'utf8')); }
 export function corpus(name: string): ReferenceDocument[] {
   const fixture = record(readJson(`${root}fixtures/${name}.expected.json`));

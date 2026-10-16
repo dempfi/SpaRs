@@ -249,6 +249,12 @@ fn malformed_snapshots_reject_unicode_offsets_indices_and_spans() {
     for (field, label) in [("entities", "X"), ("sentences", ""), ("noun_chunks", "NP")] {
         let mut snapshot = valid.clone();
         snapshot["document"][field] = json!([{"start": 0, "end": 1, "label": label}]);
+        if field == "entities" {
+            snapshot = tagged_snapshot(
+                [(json!("B"), json!("X")), (json!("O"), json!(""))],
+                snapshot["document"]["entities"].take(),
+            );
+        }
         assert!(
             Doc::from_json(&snapshot.to_string()).is_ok(),
             "rejected {field} label {label:?}"
@@ -256,12 +262,14 @@ fn malformed_snapshots_reject_unicode_offsets_indices_and_spans() {
     }
     for (pointer, accepted) in [
         ("/document/tokens/0/entity_iob", json!("")),
-        ("/document/tokens/0/entity_iob", json!("I")),
+        ("/document/tokens/0/entity_iob", json!("O")),
         ("/document/tokens/0/pos", json!("")),
         ("/document/tokens/0/pos", json!("SPACE")),
     ] {
         let mut snapshot = valid.clone();
         *snapshot.pointer_mut(pointer).unwrap() = accepted;
+        // An entity tag is annotation, so the document stores an entity list.
+        snapshot["document"]["entities"] = json!([]);
         assert!(
             Doc::from_json(&snapshot.to_string()).is_ok(),
             "rejected {pointer}"
@@ -274,12 +282,15 @@ fn malformed_snapshots_reject_unicode_offsets_indices_and_spans() {
         Err(Error::Unsupported(_))
     ));
     // Entity IDs need format v3, so an older reader rejects them instead of dropping them.
-    let mut ids = valid.clone();
+    let mut ids = tagged_snapshot(
+        [(json!("B"), json!("X")), (json!("O"), json!(""))],
+        json!([{"start": 0, "end": 1, "label": "X", "id": "q1"}]),
+    );
     ids["document"]["tokens"][0]["entity_id"] = json!("q1");
-    ids["document"]["entities"] = json!([{"start": 0, "end": 1, "label": "X", "id": "q1"}]);
     // Either kind of ID alone needs v3.
     let mut token_only = ids.clone();
     token_only["document"]["entities"] = json!([]);
+    token_only["document"]["tokens"][0]["entity_iob"] = json!("O");
     let mut entity_only = ids.clone();
     entity_only["document"]["tokens"][0]
         .as_object_mut()
@@ -380,6 +391,150 @@ fn malformed_snapshots_reject_unicode_offsets_indices_and_spans() {
         Doc::from_json(&wrong_type.to_string()),
         Err(Error::Json(_))
     ));
+}
+
+/// The two-token snapshot with entity tags `(iob, type)` per token and the given entity list.
+fn tagged_snapshot(tags: [(Value, Value); 2], entities: Value) -> Value {
+    let mut snapshot = snapshot();
+    for (token, (iob, kind)) in tags.into_iter().enumerate() {
+        snapshot["document"]["tokens"][token]["entity_iob"] = iob;
+        snapshot["document"]["tokens"][token]["entity_type"] = kind;
+    }
+    snapshot["document"]["entities"] = entities;
+    snapshot
+}
+
+#[test]
+fn snapshots_reject_entities_spacy_would_not_read_from_the_tags() {
+    let entity = |start, end, label| json!({"start": start, "end": end, "label": label});
+    let (b, i, o, x) = (json!("B"), json!("I"), json!("O"), json!("X"));
+    let (null, empty) = (Value::Null, json!(""));
+    let rejected = [
+        // spaCy derives `doc.ents` from the tags, so a stored list must be that derivation.
+        (
+            "entity without tags",
+            [(null.clone(), null.clone()), (null.clone(), null.clone())],
+            json!([entity(0, 1, "X")]),
+        ),
+        (
+            "tagged entity not listed",
+            [(b.clone(), x.clone()), (o.clone(), empty.clone())],
+            json!([]),
+        ),
+        (
+            "wrong entity end",
+            [(b.clone(), x.clone()), (i.clone(), x.clone())],
+            json!([entity(0, 1, "X")]),
+        ),
+        (
+            "wrong entity label",
+            [(b.clone(), x.clone()), (o.clone(), empty.clone())],
+            json!([entity(0, 1, "Y")]),
+        ),
+        // A list is absent only without entity annotation, so it cannot hide a tagged entity or
+        // claim that outside tags are unannotated.
+        (
+            "outside tags with no list",
+            [(o.clone(), empty.clone()), (o.clone(), null.clone())],
+            null.clone(),
+        ),
+        (
+            "tagged entity with no list",
+            [(b.clone(), x.clone()), (o.clone(), empty.clone())],
+            null.clone(),
+        ),
+    ];
+    // spaCy's `doc.ents` raises E093 for an inside tag with no open entity: on the first token,
+    // after an outside or missing tag, or after a blocked token (a beginning tag without a type).
+    // Each is rejected for that reason, whether the list is empty or the one a repair to `B`
+    // would give.
+    for (name, tags, repaired) in [
+        (
+            "first-token I",
+            [(i.clone(), x.clone()), (o.clone(), empty.clone())],
+            entity(0, 1, "X"),
+        ),
+        (
+            "I after O",
+            [(o.clone(), empty.clone()), (i.clone(), x.clone())],
+            entity(1, 2, "X"),
+        ),
+        (
+            "I after missing",
+            [(null.clone(), null.clone()), (i.clone(), x.clone())],
+            entity(1, 2, "X"),
+        ),
+        (
+            "I after blocked B",
+            [(b.clone(), empty.clone()), (i.clone(), x.clone())],
+            entity(1, 2, "X"),
+        ),
+    ] {
+        for entities in [json!([]), json!([repaired])] {
+            let invalid = tagged_snapshot(tags.clone(), entities);
+            match Doc::from_json(&invalid.to_string()) {
+                Err(Error::Model(message)) if message.contains("no entity to continue") => {}
+                other => panic!("{name}: {other:?} for {invalid}"),
+            }
+        }
+    }
+    let wrongly_accepted: Vec<_> = rejected
+        .into_iter()
+        .filter(|(_, tags, entities)| {
+            let invalid = tagged_snapshot(tags.clone(), entities.clone());
+            !matches!(Doc::from_json(&invalid.to_string()), Err(Error::Model(_)))
+        })
+        .map(|(name, _, _)| name)
+        .collect();
+    assert!(wrongly_accepted.is_empty(), "accepted {wrongly_accepted:?}");
+    let accepted = [
+        // An inside tag continues the open entity whatever its own type: spaCy 3.8.14's `Doc.ents`
+        // getter (spacy/tokens/doc.pyx) takes the label from the beginning token and reads only
+        // the IOB code of the tokens after it.
+        (
+            "I of another type",
+            [(b.clone(), x.clone()), (i.clone(), json!("Y"))],
+            json!([entity(0, 2, "X")]),
+        ),
+        (
+            "two entities",
+            [(b.clone(), x.clone()), (b.clone(), json!("Y"))],
+            json!([entity(0, 1, "X"), entity(1, 2, "Y")]),
+        ),
+        (
+            "blocked and outside",
+            [(b.clone(), empty.clone()), (o.clone(), null.clone())],
+            json!([]),
+        ),
+        // A missing tag starts no entity whatever its spelling or stored type.
+        (
+            "entity then missing",
+            [(b.clone(), x.clone()), (null.clone(), x.clone())],
+            json!([entity(0, 1, "X")]),
+        ),
+        (
+            "missing then entity",
+            [(empty.clone(), x.clone()), (b.clone(), x.clone())],
+            json!([entity(1, 2, "X")]),
+        ),
+        // spaCy's `doc.ents` is empty with or without entity annotation, so either list form
+        // describes tags without entities; reference fixtures store `[]` for unannotated documents.
+        (
+            "no annotation, no list",
+            [(null.clone(), null.clone()), (empty.clone(), x.clone())],
+            null.clone(),
+        ),
+        (
+            "no annotation, empty list",
+            [(null.clone(), null.clone()), (empty.clone(), x.clone())],
+            json!([]),
+        ),
+    ];
+    for (name, tags, entities) in accepted {
+        let snapshot = tagged_snapshot(tags, entities);
+        let restored = Doc::from_json(&snapshot.to_string());
+        assert!(restored.is_ok(), "rejected {name}: {restored:?}");
+    }
 }
 
 #[test]

@@ -1,5 +1,5 @@
 //! Checked entity annotation updates, following spaCy 3.8.14 `Doc.set_ents`.
-use super::{Doc, Span, TokenIndex};
+use super::{Doc, Span, Token, TokenIndex};
 use crate::{Error, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -100,15 +100,15 @@ impl Doc {
     /// Replace entity annotation like spaCy's `Doc.set_ents`, keeping the token IOB tags,
     /// token entity types and [`Doc::entities`] consistent.
     ///
-    /// Every check runs before anything changes. A span outside the document, a reversed span
-    /// or two spans sharing a token return [`Error::Bounds`]. A current IOB tag other than `B`,
-    /// `I`, `O` or missing, or an `I` left with no entity to continue, returns
-    /// [`Error::Unsupported`]. [`Doc::from_json`] rejects unknown tags, so one can only come from
-    /// direct changes to the public token fields; a stray `I` can also come from an edited
-    /// snapshot. Afterwards an inside tag that follows a missing or outside token, or a token of
-    /// another type, becomes a beginning tag. Tokens the update does not write keep their stored
-    /// values. A non-empty document whose tokens are all missing has no entity annotation
-    /// (`entities()` is `None`).
+    /// Every check runs before anything changes. A span past the document end or with
+    /// `start > end` returns [`Error::Bounds`], as do two spans sharing a token (entities with an
+    /// empty label are exempt). If the update blocks the token before an `I` that has no entity type
+    /// and leaves that `I` unwritten (only with [`EntityDefault::Unmodified`]), the `I` has no entity
+    /// to continue and [`Error::Unsupported`] is returned; spaCy writes this update and raises E093
+    /// when `doc.ents` is next read. Only a snapshot can store an `I` without a type. Afterwards an
+    /// inside tag that follows a missing or outside token, or a token of another type, becomes a
+    /// beginning tag. Tokens the update does not write keep their stored values. A non-empty
+    /// document whose tokens are all missing has no entity annotation (`entities()` is `None`).
     pub fn set_entities(&mut self, update: &EntityUpdate) -> Result<()> {
         let changes = self.entity_changes(update)?;
         self.apply_entity_changes(changes);
@@ -172,7 +172,7 @@ impl Doc {
                 }
             }
         }
-        let mut tags = self.entity_tags()?;
+        let mut tags = entity_tags(&self.tokens)?;
         // IDs change only where an entity carries a non-empty one; every other token keeps its ID.
         let mut ids: Vec<Option<&str>> =
             self.tokens.iter().map(|t| t.entity_id.as_deref()).collect();
@@ -254,28 +254,37 @@ impl Doc {
             entities: annotated.then_some(spans),
         })
     }
+}
 
-    /// The current tags. A missing tag is read without its type, which only an edited snapshot or
-    /// a direct field change can store; `set_ents` clears the type whenever it writes a missing tag.
-    fn entity_tags(&self) -> Result<Vec<(Iob, &str)>> {
-        self.tokens
-            .iter()
-            .map(|token| {
-                let iob = match token.entity_iob.as_deref() {
-                    None | Some("") => return Ok((Iob::Missing, "")),
-                    Some("B") => Iob::Begin,
-                    Some("I") => Iob::Inside,
-                    Some("O") => Iob::Outside,
-                    Some(_) => {
-                        return Err(Error::Unsupported(
-                            "entity IOB tags must be B, I, O or missing".into(),
-                        ))
-                    }
-                };
-                Ok((iob, token.entity_type.as_deref().unwrap_or("")))
-            })
-            .collect()
-    }
+/// The entities spaCy's `Doc.ents` reads from the tokens' tags and IDs. An inside tag with no
+/// entity to continue returns [`Error::Unsupported`], where spaCy raises E093.
+pub(super) fn entities_from_tags(tokens: &[Token]) -> Result<Vec<Span>> {
+    let tags = entity_tags(tokens)?;
+    let ids: Vec<Option<&str>> = tokens.iter().map(|t| t.entity_id.as_deref()).collect();
+    derive_entities(&tags, &ids)
+}
+
+/// The tokens' current tags. A missing tag is read without its type, which only an edited
+/// snapshot or a direct field change can store; `set_ents` clears the type whenever it writes a
+/// missing tag.
+fn entity_tags(tokens: &[Token]) -> Result<Vec<(Iob, &str)>> {
+    tokens
+        .iter()
+        .map(|token| {
+            let iob = match token.entity_iob.as_deref() {
+                None | Some("") => return Ok((Iob::Missing, "")),
+                Some("B") => Iob::Begin,
+                Some("I") => Iob::Inside,
+                Some("O") => Iob::Outside,
+                Some(_) => {
+                    return Err(Error::Unsupported(
+                        "entity IOB tags must be B, I, O or missing".into(),
+                    ))
+                }
+            };
+            Ok((iob, token.entity_type.as_deref().unwrap_or("")))
+        })
+        .collect()
 }
 
 /// spaCy's `Doc.ents`: a beginning tag with a type starts an entity, inside tags continue it,
