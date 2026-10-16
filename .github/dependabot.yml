@@ -16,3 +16,9 @@ updates:
       - /bindings/node
     schedule:
       interval: weekly
+    ignore:
+      # Keep Node type definitions on the major release in the bindings' minimum
+      # `engines.node`, so TypeScript rejects APIs that the oldest supported Node
+      # lacks. Raise this together with `engines.node`.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
