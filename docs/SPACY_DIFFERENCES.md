@@ -181,7 +181,7 @@ The cause is `self.c.erase(self.c.begin() + i - 1)` in `SpanGroup.__delitem__`; 
 
 ## SpanRuler
 
-These apply to the Rust [`SpanRuler`](SPAN_RULER.md). Its other behavior follows spaCy, including the ordering of identical spans by string-store hashes and the repeated spans a filter adds to an existing group, so neither is listed here. The unit tests are in `crates/spars/src/span_ruler/tests.rs`; run them with `cargo test --release --offline -p spars-nlp --lib span_ruler`.
+These apply to the Rust and Node [`SpanRuler`](SPAN_RULER.md). Its other behavior follows spaCy, including the ordering of identical spans by string-store hashes and the repeated spans a filter adds to an existing group, so neither is listed here. The unit tests are in `crates/spars/src/span_ruler/tests.rs`; run them with `cargo test --release --offline -p spars-nlp --lib span_ruler`.
 
 ### Failed additions change nothing
 
@@ -189,4 +189,4 @@ These apply to the Rust [`SpanRuler`](SPAN_RULER.md). Its other behavior follows
 - **SpaRs:** `add` checks every pattern first and returns an error without changing the ruler, including the labels `contains` reports.
 - **Reason:** a caller that handles the error can keep using the ruler without inspecting what was partly changed, as with the [EntityRuler](#failed-additions-and-removals-change-nothing). `remove` and `remove_by_id` already check before changing anything in spaCy, so they need no difference.
 - **Effect:** after a failed `add`, SpaRs matches and lists what it did before the call; spaCy may match more, list patterns that never match, and report labels of patterns it did not add.
-- **Tests:** `invalid_additions_change_nothing`, `phrase_attributes_validate_pattern_documents`.
+- **Tests:** `invalid_additions_change_nothing`, `phrase_attributes_validate_pattern_documents`, and in Node `SpanRuler rejects malformed patterns without changing its rules` in `bindings/node/tests/span-ruler.test.mts`.

@@ -15,9 +15,9 @@ export function restrictConstructor(source: string, name = 'Model'): string {
 
 const executionTypes = `
 /**
- * Limits on concurrent native work for every model, matcher and entity ruler in this JavaScript
+ * Limits on concurrent native work for every model, matcher and ruler in this JavaScript
  * thread. They cover \`process\`, \`processDocument\`, \`processBatch\`, \`pipe\`, \`findMatches\` and
- * \`EntityRuler.annotate\`, but not \`loadModel\` or \`downloadModel\`.
+ * the rulers' \`annotate\`, but not \`loadModel\` or \`downloadModel\`.
  */
 export interface ExecutionOptions {
   /** Calls running on Node's worker pool at once; a positive integer. */
@@ -35,7 +35,7 @@ export declare function configureExecution(options: ExecutionOptions | null): vo
  * \`SPARS_INPUT_LIMIT\`. Lengths count UTF-16 units (\`string.length\`). All fields are positive integers.
  */
 export interface InputLimits {
-  /** Per text in \`process\`, \`processDocument\` and \`processBatch\`, and per document (\`utf16Length\`) in \`findMatches\` and \`EntityRuler.annotate\`. */
+  /** Per text in \`process\`, \`processDocument\` and \`processBatch\`, and per document (\`utf16Length\`) in \`findMatches\` and the rulers' \`annotate\`. */
   maxTextLength: number
   /** Texts per \`processBatch\` call. */
   maxBatchSize: number
@@ -95,6 +95,24 @@ export interface RulerTokenPattern extends RulerPatternBase {
 }
 /** A phrase as listed by \`EntityRuler.patterns\`. */
 export interface RulerPhrasePattern extends RulerPatternBase {
+  /** The full text of the phrase's pattern document, including whitespace. */
+  phrase: string
+  tokens?: never
+}` },
+  { name: 'SpanRulerPattern', fields: ['label', 'id', 'tokens', 'phrase'], replacement: `/** A pattern as \`SpanRuler.patterns\` lists it, like an entry of spaCy's \`SpanRuler.patterns\`. */
+export type SpanRulerPattern = SpanRulerTokenPattern | SpanRulerPhrasePattern
+interface SpanRulerPatternBase {
+  label: SpanLabel | ''
+  /** Exactly as added: absent for a pattern added without an ID, \`''\` for the empty ID. */
+  id?: string
+}
+/** A token pattern as listed by \`SpanRuler.patterns\`. */
+export interface SpanRulerTokenPattern extends SpanRulerPatternBase {
+  tokens: TokenPattern
+  phrase?: never
+}
+/** A phrase as listed by \`SpanRuler.patterns\`. */
+export interface SpanRulerPhrasePattern extends SpanRulerPatternBase {
   /** The full text of the phrase's pattern document, including whitespace. */
   phrase: string
   tokens?: never
@@ -203,6 +221,72 @@ export interface SpanGroupInput {
 }
 `;
 
+const spanRulerTypes = `
+/**
+ * How a \`SpanRuler\` resolves overlaps between its matches and the existing spans: the group under \`spansKey\` for \`spansFilter\`, and the document's entities for \`entitiesFilter\`. There are existing spans only with \`overwrite: false\`.
+ * Names are spaCy's registered filters without their \`spacy.\` prefix and version. Matches are considered longest first, then by earliest start.
+ * - \`'first_longest'\` (\`spacy.first_longest_spans_filter.v1\`): existing spans and matches compete together, existing spans first among equals; the result is ordered by start.
+ * - \`'prioritize_new'\` (\`spacy.prioritize_new_ents_filter.v1\`): a match is accepted unless it overlaps an accepted match, and existing spans overlapping an accepted match are removed. The result lists the remaining existing spans in their order, then the accepted matches, longest first.
+ * - \`'prioritize_existing'\` (\`spacy.prioritize_existing_ents_filter.v1\`): like \`'prioritize_new'\`, including the result order, but every existing span is kept and matches overlapping one are dropped.
+ */
+export type SpanFilter = 'first_longest' | 'prioritize_new' | 'prioritize_existing'
+/** Settings fixed when a \`SpanRuler\` is created, named after spaCy's \`span_ruler\` config and defaulting to its factory defaults. \`null\` is the same as omitting an option, except for \`spansKey\`. An unknown filter or \`phraseAttribute\` name throws \`SPARS_UNSUPPORTED\`; other properties, such as spaCy's own \`spans_key\`, and values of the wrong type throw \`InvalidArg\`. */
+export interface SpanRulerOptions {
+  /** spaCy's \`spans_key\`: the span group the ruler writes. Omitted or \`undefined\` means \`'ruler'\`; \`null\` or \`''\` writes no span group. */
+  spansKey?: SpanGroupKey | null
+  /** spaCy's \`spans_filter\`. Omitted or \`null\` (the default) adds every match to the group, including overlapping ones. */
+  spansFilter?: SpanFilter | null
+  /** spaCy's \`annotate_ents\`, default \`false\`: whether \`annotate\` also writes entities, resolved with \`entitiesFilter\`. */
+  annotateEntities?: boolean | null
+  /**
+   * spaCy's \`ents_filter\`, default \`'first_longest'\`. Existing entities take part only with \`overwrite: false\`; with the default \`overwrite: true\` they are discarded whatever the filter.
+   * With \`overwrite: false\`, \`'prioritize_new'\` resembles the EntityRuler's \`overwriteEntities: true\` and \`'prioritize_existing'\` its default, except that ties between rules over the same tokens follow the order \`findMatches\` reports.
+   */
+  entitiesFilter?: SpanFilter | null
+  /**
+   * spaCy's \`phrase_matcher_attr\`: the token value phrase patterns compare, default \`'ORTH'\` (exact token text). Token patterns are unaffected.
+   * \`LEMMA\`, \`POS\`, \`TAG\`, \`DEP\` and \`MORPH\` need phrase documents carrying that annotation. A lexical flag such as \`IS_ALPHA\` needs a ruler created with a model; without one, every phrase \`add\` throws \`SPARS_INVALID_PATTERN\`.
+   * Names are uppercase; spaCy also accepts lowercase.
+   */
+  phraseAttribute?: PhraseAttribute | null
+  /**
+   * spaCy's \`overwrite\`, default \`true\`. When \`true\`, \`annotate\` replaces the group under \`spansKey\` with a new group named after the key, without attrs, and discards existing entities before filtering.
+   * When \`false\`, an existing group keeps its name and attrs and is extended, and existing entities compete with the matches in \`entitiesFilter\`.
+   */
+  overwrite?: boolean | null
+}
+/** A pattern for \`SpanRuler.add\`, like an entry of spaCy's \`add_patterns\`: token conditions or a phrase. */
+export type SpanPattern = SpanTokenPattern | SpanPhrasePattern
+interface SpanPatternBase {
+  /** The label of matched spans. An empty label is accepted: its matches go into the span group and take part in filtering, but add no entity. */
+  label: SpanLabel | ''
+  /**
+   * Written to matched spans and, with \`annotateEntities\`, to their entities and tokens. Without one, an entity's tokens keep any entity ID they already had.
+   * \`''\` matches like no ID, but \`SpanRuler.ids\` lists it and \`removeById('')\` removes the pattern.
+   */
+  id?: string
+}
+/** A \`SpanRuler.add\` pattern of token conditions. */
+export interface SpanTokenPattern extends SpanPatternBase {
+  /** Token conditions, matched as by \`TokenMatcher\`. Lexical flag conditions need a ruler created with a model; otherwise \`add\` throws \`SPARS_INVALID_PATTERN\`. */
+  tokens: TokenPattern
+  phrase?: never
+}
+/** A \`SpanRuler.add\` pattern that matches a phrase document. */
+export interface SpanPhrasePattern extends SpanPatternBase {
+  /**
+   * A document processed by the same model stages as the documents the ruler annotates, as spaCy runs phrase patterns through the components before the ruler.
+   * Only the ruler's \`phraseAttribute\` is compared. For LEMMA, POS, TAG, DEP and MORPH, a nonempty document in which no token has that annotation throws \`SPARS_INVALID_PATTERN\`. An empty document is accepted and counted by \`size\` but never matches. The ruler copies what it needs, so the document can be discarded afterwards.
+   */
+  phrase: NativeDocument
+  tokens?: never
+}
+`;
+
+export function addSpanRulerTypes(source: string): string {
+  return source.includes('export type SpanPattern ') ? source : source + spanRulerTypes;
+}
+
 export function addSpanGroupTypes(source: string): string {
   return source.includes('export type SpanGroupAttrs ') ? source : source + spanGroupTypes;
 }
@@ -227,6 +311,7 @@ export function addMatcherLoaders(source: string): string {
   const hooks = ['PhraseMatcher', 'TokenMatcher', 'DependencyMatcher'].map(name =>
     `require('./execution.cjs').installMatcher(module.exports.${name}, module.exports.NativeDocument, '${name.replace('Matcher', '').toLowerCase()}');`);
   hooks.push("require('./execution.cjs').installEntityRuler(module.exports.EntityRuler, module.exports.NativeDocument);");
+  hooks.push("require('./execution.cjs').installSpanRuler(module.exports.SpanRuler, module.exports.NativeDocument);");
   hooks.push("require('./execution.cjs').installDocument(module.exports.NativeDocument);");
   for (const hook of hooks) if (!source.includes(hook)) source += `\n${hook}\n`;
   return source;
@@ -238,7 +323,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   for (const name of ['Model', 'NativeDocument', 'NativeToken', 'NativeSpan']) declarations = restrictConstructor(declarations, name);
   for (const { name, fields, replacement } of replacements) declarations = replaceInterface(declarations, name, fields, replacement);
   const vocabulary = readFileSync(new URL('./vocabulary.d.ts', import.meta.url), 'utf8');
-  writeFileSync(path, addVocabularyTypes(addSpanGroupTypes(addEntityPatternTypes(addExecutionTypes(declarations))), vocabulary));
+  writeFileSync(path, addVocabularyTypes(addSpanRulerTypes(addSpanGroupTypes(addEntityPatternTypes(addExecutionTypes(declarations)))), vocabulary));
   const loader = new URL('../index.js', import.meta.url);
   let source = addExecutionLoader(readFileSync(loader, 'utf8'));
   source = addMatcherLoaders(source);

@@ -2,7 +2,7 @@
 //! `entity_ruler`.
 use crate::{document::NativeDocument, errors, phrase_matcher, token_matcher::TokenPattern};
 use napi::{
-    bindgen_prelude::{AsyncTask, ClassInstance, JsObjectValue, Object, Utf16String},
+    bindgen_prelude::{AsyncTask, ClassInstance, JsObjectValue, JsValue, Object, Utf16String},
     Env, Result, Status, Task,
 };
 use napi_derive::napi;
@@ -35,8 +35,14 @@ pub struct RulerPattern {
 }
 
 /// napi objects ignore undeclared properties; reject them so a misspelled field such as `pattern`
-/// cannot silently drop a rule.
-fn known_fields(object: &Object, kind: &str, allowed: &[&str]) -> Result<()> {
+/// cannot silently drop a rule. Arrays are objects to napi but are never valid here.
+pub(crate) fn known_fields(object: &Object, kind: &str, allowed: &[&str]) -> Result<()> {
+    if object.is_array()? {
+        return Err(napi::Error::new(
+            Status::InvalidArg,
+            format!("expected a {kind} object, not an array"),
+        ));
+    }
     let names = object.get_property_names()?;
     for i in 0..names.get_array_length()? {
         let name: String = names.get_element(i)?;
@@ -50,24 +56,22 @@ fn known_fields(object: &Object, kind: &str, allowed: &[&str]) -> Result<()> {
     Ok(())
 }
 
-enum Kind {
+pub(crate) enum Kind {
     Tokens(spars::TokenPattern),
     Phrase(Arc<spars::Doc>),
 }
 
-struct Pattern {
-    label: String,
-    id: Option<String>,
-    kind: Kind,
+/// A ruler pattern read from JavaScript, before its phrase document is borrowed.
+pub(crate) struct Pattern {
+    pub(crate) label: String,
+    pub(crate) id: Option<String>,
+    pub(crate) kind: Kind,
 }
 
 impl Pattern {
-    fn from_object(env: Env, object: &Object) -> Result<Self> {
-        known_fields(
-            object,
-            "entity pattern",
-            &["label", "id", "tokens", "phrase"],
-        )?;
+    /// Read one pattern; `noun` names it in errors, such as `"entity pattern"`.
+    pub(crate) fn from_object(env: Env, object: &Object, noun: &str) -> Result<Self> {
+        known_fields(object, noun, &["label", "id", "tokens", "phrase"])?;
         let text = |value: Utf16String| errors::text(&value).map_err(|error| error.into_napi(env));
         let label = text(object.get_named_property("label")?)?;
         let id = object
@@ -85,7 +89,7 @@ impl Pattern {
             _ => {
                 return Err(napi::Error::new(
                     Status::InvalidArg,
-                    "an entity pattern needs exactly one of `tokens` and `phrase`",
+                    format!("each {noun} needs exactly one of `tokens` and `phrase`"),
                 ))
             }
         };
@@ -116,11 +120,12 @@ pub struct EntityRuler {
 #[napi]
 impl EntityRuler {
     /// Create an empty ruler; omitted options take spaCy's defaults. Pass a model to evaluate
-    /// lexical flags such as `IS_ALPHA` in token conditions and as `phraseAttribute`; only its
-    /// lexical rules are used, and it is never run. Without one, adding a flag condition, or any
-    /// phrase under a flag `phraseAttribute`, throws `SPARS_INVALID_PATTERN`. An empty
+    /// lexical flags, such as `is_alpha` in token conditions or `'IS_ALPHA'` as `phraseAttribute`;
+    /// only its lexical rules are used, and it is never run. Without one, adding a flag condition,
+    /// or any phrase under a flag `phraseAttribute`, throws `SPARS_INVALID_PATTERN`. An empty
     /// `idSeparator` throws `SPARS_INVALID_PATTERN`, an `idSeparator` or `phraseAttribute` with an
-    /// unpaired surrogate `SPARS_INVALID_TEXT`, an unknown `phraseAttribute` `SPARS_UNSUPPORTED`, and an unknown option or a value of the wrong type `InvalidArg`.
+    /// unpaired surrogate `SPARS_INVALID_TEXT`, an unknown `phraseAttribute` `SPARS_UNSUPPORTED`,
+    /// and an unknown option or a value of the wrong type `InvalidArg`.
     #[napi(
         constructor,
         ts_args_type = "options?: EntityRulerOptions | undefined | null, model?: Model | undefined | null"
@@ -247,7 +252,7 @@ impl EntityRuler {
         let ruler = Arc::get_mut(&mut self.inner).ok_or_else(|| errors::busy().into_napi(env))?;
         let patterns = patterns
             .iter()
-            .map(|object| Pattern::from_object(env, object))
+            .map(|object| Pattern::from_object(env, object, "entity pattern"))
             .collect::<Result<Vec<_>>>()?;
         // Phrase documents are borrowed from their own list, so token patterns can move.
         let documents: Vec<Arc<spars::Doc>> = patterns

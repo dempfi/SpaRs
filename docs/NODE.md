@@ -609,9 +609,51 @@ The options are spaCy's settings: `overwriteEntities` (`overwrite_ents`, default
 
 `add` checks every pattern before changing the ruler. A pattern with an unknown field, with a `label` or `id` that is not a string, with both or neither of `tokens` and `phrase`, with a `phrase` that is not a native document, with an invalid token pattern, with a lexical flag condition or flag phrase attribute on a ruler created without a model, or with a phrase lacking the annotation the phrase attribute compares throws `SPARS_INVALID_PATTERN` and adds nothing. `remove` of an ID that was never added or whose patterns were already removed throws `SPARS_INVALID_PATTERN`. When the ruler is created, an empty `idSeparator` throws `SPARS_INVALID_PATTERN`, an unknown `phraseAttribute` `SPARS_UNSUPPORTED`, and an undeclared option, such as spaCy's own `overwrite_ents`, or a value of the wrong type throws `InvalidArg`. A search over a nonempty document in which no token has the annotation an `equals` token condition reads, such as a lemma condition on a tokenizer-only document, rejects with `SPARS_INFERENCE`. `add`, `remove` and `clear` throw `SPARS_BUSY` while a `findMatches` or `annotate` call on the same ruler is queued or running, and passing anything other than a native document to `findMatches` or `annotate` throws a `TypeError`. Loading or saving patterns, spaCy's pattern dictionaries, fuzzy matching and running the ruler before the recognizer are not provided.
 
+## Add spans with rules
+
+`SpanRuler` stores matches of token patterns and phrases as a [span group](#store-span-groups) and, optionally, as entities, like spaCy's `span_ruler`. Patterns have the same shape as for the [EntityRuler](#add-entities-with-rules): a `label`, an optional `id`, and either `tokens` or `phrase`. `annotate(doc)` resolves to a new native document and leaves `doc` and its views unchanged. `findMatches(doc)` resolves to every nonempty match before filtering, ordered by start and then end, with `id` `''` for a pattern without an ID; matches of different rules over the same tokens follow spaCy's string-hash order, which is not alphabetical. Both run on Node's worker pool under the same admission limits as the matchers; every other member is synchronous.
+
+```typescript
+import assert from 'node:assert/strict';
+import { loadModel, SpanRuler } from './index.js';
+import type { Document, SpanPattern } from './index.js';
+
+const model = await loadModel(process.env.SPARS_MODEL ?? 'en_core_web_lg');
+const doc = await model.processDocument('New York City is in New York State.', 'Tokenizer');
+const patterns: SpanPattern[] = [
+  { label: 'GPE', id: 'nyc', phrase: await model.processDocument('New York City', 'Tokenizer') },
+  { label: 'GPE', phrase: await model.processDocument('New York', 'Tokenizer') },
+];
+const bounds = (spans: { start: number; end: number; id: string }[] | null | undefined) => spans?.map(({ start, end, id }) => [start, end, id]);
+const group = (document: Document, key: string) => document.spanGroups.find(entry => entry.key === key)?.spans;
+
+// By default every match goes into the 'ruler' group, including overlapping ones.
+const ruler = new SpanRuler();
+ruler.add(patterns);
+assert.deepEqual(bounds(group((await ruler.annotate(doc)).toObject(), 'ruler')), [[0, 2, ''], [0, 3, 'nyc'], [5, 7, '']]);
+
+// With spansKey null the ruler writes only entities; the default entity filter keeps the longest match.
+const entities = new SpanRuler({ spansKey: null, annotateEntities: true });
+entities.add(patterns);
+const annotated = (await entities.annotate(doc)).toObject();
+assert.deepEqual(annotated.spanGroups, []);
+assert.deepEqual(bounds(annotated.entities), [[0, 3, 'nyc'], [5, 7, '']]);
+
+// A span filter resolves overlaps in the group too.
+const filtered = new SpanRuler({ spansKey: 'places', spansFilter: 'first_longest' });
+filtered.add(patterns);
+assert.deepEqual(bounds(group((await filtered.annotate(doc)).toObject(), 'places')), [[0, 3, 'nyc'], [5, 7, '']]);
+filtered.removeById('nyc');
+assert.deepEqual([filtered.size, filtered.ids, filtered.contains('GPE')], [1, [], true]);
+```
+
+The options are spaCy's `span_ruler` settings with its factory defaults: `spansKey` (`spans_key`, default `'ruler'`; `null` or `''` writes no span group), `spansFilter` (`spans_filter`, default `null`, which keeps every match), `annotateEntities` (`annotate_ents`, default `false`), `entitiesFilter` (`ents_filter`, default `'first_longest'`), `phraseAttribute` (`phrase_matcher_attr`, default `'ORTH'`) and `overwrite` (default `true`). An omitted or `undefined` `spansKey` keeps the default; only `null` turns the group off. Filters, listed by the `SpanFilter` type, are short forms of spaCy's registered names, such as `'first_longest'` for `spacy.first_longest_spans_filter.v1`: `'first_longest'` keeps the longest non-overlapping spans, treating existing spans and matches alike; `'prioritize_new'` lets matches replace the existing spans they overlap; and `'prioritize_existing'` keeps every existing span and drops matches that overlap one. With the default `overwrite: true`, `annotate` replaces the group under `spansKey` and, with `annotateEntities`, discards the document's existing entities, including the recognizer's, before filtering; the EntityRuler keeps them by default. With `overwrite: false`, an existing group is extended and keeps its name and attrs, and existing entities compete with the matches. Pattern labels are typed `SpanLabel` and the entities written are `EntityLabel`, so under `StrictLabelSets` register a custom label in both `SpanLabels` and `EntityLabels` (see [types and autocomplete](#types-and-autocomplete)). Pass a model as the second argument, `new SpanRuler(options, model)`, to use lexical flag conditions or a lexical flag phrase attribute. The read-only properties report the options and the patterns: `size`, `labels`, `ids` and `patterns` behave like spaCy's `len(ruler)`, `labels`, `ids` and `patterns`, and `patterns` keeps each `id` exactly as added, including `''`. `contains(label)` reports whether a label was ever added, which stays true after its patterns are removed, as in spaCy. `remove(label)` removes a label's patterns, `removeById(id)` removes the patterns added with an ID, and `clear()` removes every pattern and keeps the options and model. The [SpanRuler guide](SPAN_RULER.md) describes the filters, overwriting, match order and the [differences from spaCy](SPAN_RULER.md#differences-from-spacy).
+
+`add` checks every pattern before changing the ruler and throws `SPARS_INVALID_PATTERN` for a non-array argument and for the same malformed patterns as the EntityRuler's `add`; a failed `add` adds nothing. A label, ID or option string with an unpaired surrogate throws `SPARS_INVALID_TEXT`, and a `MORPH` phrase with noncanonical morphology `SPARS_UNSUPPORTED`. `remove` of a label that was never added, and `removeById` of an ID no current pattern has, throw `SPARS_INVALID_PATTERN`. When the ruler is created, an unknown filter or `phraseAttribute` throws `SPARS_UNSUPPORTED`, and an undeclared option, such as spaCy's own `spans_key`, or a value of the wrong type throws `InvalidArg`. Searches reject with `SPARS_INFERENCE` for an `equals` token condition on annotation the document lacks, as for the EntityRuler. `add`, `remove`, `removeById` and `clear` throw `SPARS_BUSY` while a `findMatches` or `annotate` call on the same ruler is queued or running, and passing anything other than a native document to `findMatches` or `annotate` throws a `TypeError`. Custom filter functions, loading or saving patterns, spaCy's pattern dictionaries and fuzzy matching are not provided.
+
 ## Errors and verification
 
-An incompatible native addon can throw `SPARS_NATIVE_INCOMPATIBLE` during package import; remove stale native-library overrides or install matching package versions. Invalid matcher or EntityRuler registration throws synchronously. Model and processing failures reject their promises with an `Error` containing a `code` and message. Codes are `SPARS_IO`, `SPARS_INVALID_MODEL`, `SPARS_UNSUPPORTED`, `SPARS_INVALID_TEXT`, `SPARS_BOUNDS`, `SPARS_INFERENCE`, `SPARS_INVALID_PATTERN`, `SPARS_BUSY`, `SPARS_INPUT_LIMIT`, and `SPARS_TEXT_TOO_LONG`. For `pipe`, errors reject iteration; `process` and `processBatch` throw immediately for invalid JavaScript argument types or unknown stages; when the queue is full, `SPARS_BUSY` takes precedence over checking individual batch elements. `vector` also throws immediately for malformed text. Use `loadModel`; constructing `Model` directly is unsupported and its TypeScript constructor is private.
+An incompatible native addon can throw `SPARS_NATIVE_INCOMPATIBLE` during package import; remove stale native-library overrides or install matching package versions. Invalid matcher, EntityRuler or SpanRuler registration throws synchronously. Model and processing failures reject their promises with an `Error` containing a `code` and message. Codes are `SPARS_IO`, `SPARS_INVALID_MODEL`, `SPARS_UNSUPPORTED`, `SPARS_INVALID_TEXT`, `SPARS_BOUNDS`, `SPARS_INFERENCE`, `SPARS_INVALID_PATTERN`, `SPARS_BUSY`, `SPARS_INPUT_LIMIT`, and `SPARS_TEXT_TOO_LONG`. For `pipe`, errors reject iteration; `process` and `processBatch` throw immediately for invalid JavaScript argument types or unknown stages; when the queue is full, `SPARS_BUSY` takes precedence over checking individual batch elements. `vector` also throws immediately for malformed text. Use `loadModel`; constructing `Model` directly is unsupported and its TypeScript constructor is private.
 
 After the [reference setup](DEVELOPMENT.md#set-up-the-project), run:
 

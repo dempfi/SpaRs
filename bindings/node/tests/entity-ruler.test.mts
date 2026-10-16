@@ -166,7 +166,7 @@ test('EntityRuler options default like spaCy and reject invalid settings', () =>
   assert.throws(() => Reflect.construct(EntityRuler, [{ phraseAttribute: 'lower' }]), hasCode('SPARS_UNSUPPORTED'));
   assert.throws(() => new EntityRuler({ idSeparator: '\uD800' }), hasCode('SPARS_INVALID_TEXT'));
   // Unknown options, such as spaCy's own names, and values of the wrong type are rejected.
-  for (const options of [{ overwrite_ents: true }, { overwriteEnts: true }, { overwriteEntities: 'yes' }, { idSeparator: 5 }]) {
+  for (const options of [{ overwrite_ents: true }, { overwriteEnts: true }, { overwriteEntities: 'yes' }, { idSeparator: 5 }, [], ['x']]) {
     assert.throws(() => Reflect.construct(EntityRuler, [options]), hasCode('InvalidArg'), JSON.stringify(options));
   }
   // Lexical flag phrases need a model; without one every phrase addition fails.
@@ -212,7 +212,9 @@ test('EntityRuler annotates copies and rejects rule changes while searches are p
   ruler.add([{ label: 'ORG', id: 'acme', tokens: acme }, { label: 'ORG', phrase: doc(['Acme', 'Corp']) }]);
   assert.deepEqual(ruler.patterns, [{ label: 'ORG', id: 'acme', tokens: acme }, { label: 'ORG', phrase: 'Acme Corp' }]);
   const input = doc(['Acme', 'Corp', 'rocks']);
-  for (const pending of [ruler.findMatches(input), ruler.annotate(input)]) {
+  // Start each search alone, so the checks do not depend on which one finishes first.
+  for (const start of [() => ruler.findMatches(input), () => ruler.annotate(input)]) {
+    const pending = start();
     assert.throws(() => ruler.add([{ label: 'X', tokens: acme }]), hasCode('SPARS_BUSY'));
     assert.throws(() => ruler.remove('acme'), hasCode('SPARS_BUSY'));
     assert.throws(() => ruler.clear(), hasCode('SPARS_BUSY'));

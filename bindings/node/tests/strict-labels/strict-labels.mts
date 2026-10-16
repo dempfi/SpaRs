@@ -1,6 +1,6 @@
 // Compiled separately (tsconfig.json here) because augmentation is global to a compilation. The
 // package name resolves to the local declarations, as it does for an installed package.
-import type { DependencyLabel, Document, EntityInput, EntityLabel, EntityMatch, EntityPattern, EntityRuler, RulerPattern, FineGrainedTag, ModelName, ModelNames, SpanGroupKey, SpanGroupKeys, SpanInput, SpanLabel, Token } from '@spars/node';
+import type { DependencyLabel, Document, EntityInput, EntityLabel, EntityMatch, EntityPattern, EntityRuler, RulerPattern, FineGrainedTag, ModelName, ModelNames, SpanGroupKey, SpanGroupKeys, SpanInput, SpanLabel, SpanPattern, SpanRuler, SpanRulerPattern, Token } from '@spars/node';
 
 declare module '@spars/node' {
   interface EntityLabels { PRODUCT_CODE: true }
@@ -36,6 +36,12 @@ export type Contracts = [
   Assert<Equal<'UNREGISTERED' extends SpanLabel ? true : false, false>>,
   Assert<Equal<string extends NonNullable<SpanInput['label']> ? true : false, false>>,
   Assert<Equal<string extends NonNullable<Document['spanGroups']>[number]['spans'][number]['label'] ? true : false, false>>,
+  Assert<Equal<'CANDIDATE' extends SpanPattern['label'] ? true : false, true>>,
+  Assert<Equal<string extends SpanPattern['label'] ? true : false, false>>,
+  Assert<Equal<string extends SpanRulerPattern['label'] ? true : false, false>>,
+  Assert<Equal<string extends SpanRuler['labels'][number] ? true : false, false>>,
+  Assert<Equal<string extends Awaited<ReturnType<SpanRuler['findMatches']>>[number]['label'] ? true : false, false>>,
+  Assert<Equal<'candidates' extends NonNullable<SpanRuler['spansKey']> ? true : false, true>>,
   // Span group keys autocomplete registered keys but accept any key.
   Assert<Equal<'candidates' extends keyof SpanGroupKeys ? true : false, true>>,
   Assert<Equal<'other' extends SpanGroupKey ? true : false, true>>,
@@ -49,3 +55,13 @@ export function label(value: EntityLabel): string { return value; }
 label('PRODUCT_CODE');
 // @ts-expect-error strict entity labels reject unregistered values
 label('UNREGISTERED');
+
+// Strict span labels also apply to rule changes and lookups.
+export function strictRuler(ruler: SpanRuler): void {
+  ruler.remove('CANDIDATE');
+  // @ts-expect-error an unregistered span label
+  ruler.remove('UNREGISTERED');
+  void ruler.contains('CANDIDATE');
+  // @ts-expect-error an unregistered span label
+  void ruler.contains('UNREGISTERED');
+}

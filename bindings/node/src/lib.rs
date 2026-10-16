@@ -9,6 +9,7 @@ mod matcher_types;
 mod model_store;
 mod models;
 mod phrase_matcher;
+mod span_ruler;
 mod token_matcher;
 mod vectors;
 mod views;

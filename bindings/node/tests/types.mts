@@ -1,9 +1,10 @@
 import { Model } from '../index.js';
-import { downloadModel, EntityRuler, loadModel, PhraseMatcher, TokenMatcher } from '../index.js';
+import { downloadModel, EntityRuler, loadModel, PhraseMatcher, SpanRuler, TokenMatcher } from '../index.js';
 import type { Document, Token, TokenAnnotations, Span, Stage, NativeDocument, Lexeme, ModelStore, PhraseMatch, TokenMatch, DependencyMatcher, DependencyMatch,
   DependencyLink, DependencyLabel, DependencyPattern, DependencyRelation, EntityIob, EntityLabel, EntityLabels, EntityInput, FineGrainedTag, ModelName,
   PhraseAttribute, SparsError, SparsErrorCode, TokenConstraint, TokenPattern, UniversalPos, EntityMatch, EntityPattern, RulerPattern,
-  EntityRulerOptions, JsonInput, JsonValue, SpanGroup, SpanGroupAttrs, SpanGroupInput, SpanGroupKey, SpanInput, SpanLabel } from '../index.js';
+  EntityRulerOptions, JsonInput, JsonValue, SpanGroup, SpanGroupAttrs, SpanGroupInput, SpanGroupKey, SpanInput, SpanLabel,
+  SpanFilter, SpanPattern, SpanRulerOptions, SpanRulerPattern } from '../index.js';
 import type { ByteOffset, CodePointOffset, Utf16Offset, TokenIndex } from '../units.js';
 
 type Assert<T extends true> = T;
@@ -124,6 +125,37 @@ export type Contracts = [
   Assert<Equal<EntityMatch['start'], TokenIndex>>,
   Assert<Equal<RulerPattern['label'], EntityLabel | ''>>,
   Assert<Equal<Extract<RulerPattern, { phrase: string }>['tokens'], undefined>>,
+  // SpanRuler: spaCy's filter names, a nullable span group key, and patterns listed with their exact IDs.
+  Assert<Equal<SpanFilter, 'first_longest' | 'prioritize_new' | 'prioritize_existing'>>,
+  Assert<Equal<ConstructorParameters<typeof SpanRuler>, [options?: SpanRulerOptions | null, model?: Model | null]>>,
+  Assert<Equal<SpanRulerOptions['spansKey'], SpanGroupKey | null | undefined>>,
+  Assert<Equal<SpanRulerOptions['spansFilter'], SpanFilter | null | undefined>>,
+  Assert<Equal<SpanRulerOptions['entitiesFilter'], SpanFilter | null | undefined>>,
+  Assert<Equal<SpanRulerOptions['annotateEntities'], boolean | null | undefined>>,
+  Assert<Equal<SpanRulerOptions['overwrite'], boolean | null | undefined>>,
+  Assert<Equal<SpanRulerOptions['phraseAttribute'], PhraseAttribute | null | undefined>>,
+  Assert<Equal<SpanRuler['spansKey'], SpanGroupKey | null>>,
+  Assert<Equal<SpanRuler['spansFilter'], SpanFilter | null>>,
+  Assert<Equal<SpanRuler['entitiesFilter'], SpanFilter>>,
+  Assert<Equal<SpanRuler['annotateEntities'], boolean>>,
+  Assert<Equal<SpanRuler['overwrite'], boolean>>,
+  Assert<Equal<SpanRuler['phraseAttribute'], PhraseAttribute>>,
+  Assert<Equal<SpanRuler['size'], number>>,
+  Assert<Equal<SpanRuler['labels'], (SpanLabel | '')[]>>,
+  Assert<Equal<SpanRuler['ids'], string[]>>,
+  Assert<Equal<SpanRuler['patterns'], SpanRulerPattern[]>>,
+  Assert<Equal<Parameters<SpanRuler['add']>[0], SpanPattern[]>>,
+  Assert<Equal<Parameters<SpanRuler['remove']>[0], SpanLabel | ''>>,
+  Assert<Equal<Parameters<SpanRuler['contains']>[0], SpanLabel | ''>>,
+  Assert<Equal<Parameters<SpanRuler['removeById']>[0], string>>,
+  Assert<Equal<ReturnType<SpanRuler['findMatches']>, Promise<Span<SpanLabel | ''>[]>>>,
+  Assert<Equal<ReturnType<SpanRuler['annotate']>, Promise<NativeDocument>>>,
+  Assert<Equal<SpanPattern['label'], SpanLabel | ''>>,
+  Assert<Equal<SpanPattern['id'], string | undefined>>,
+  Assert<Equal<SpanRulerPattern['label'], SpanLabel | ''>>,
+  Assert<Equal<SpanRulerPattern['id'], string | undefined>>,
+  Assert<Equal<Extract<SpanRulerPattern, { tokens: TokenPattern }>['phrase'], undefined>>,
+  Assert<Equal<Extract<SpanRulerPattern, { phrase: string }>['tokens'], undefined>>,
 ];
 
 // Closed sets reject typos at compile time. Each rejected line follows an accepted line of the same
@@ -167,6 +199,16 @@ export function rejected(link: DependencyLink, constraint: TokenConstraint, docu
   ruler.add([{ label: 'ORG' }]);
   // @ts-expect-error a phrase is a processed document, not text
   ruler.add([{ label: 'ORG', phrase: 'Acme' }]);
+  const spans = new SpanRuler({ spansKey: null, spansFilter: 'prioritize_new', entitiesFilter: 'first_longest' });
+  // @ts-expect-error filter names are spaCy's snake case names
+  void new SpanRuler({ spansFilter: 'prioritizeNew' });
+  // @ts-expect-error filter names omit spaCy's registry prefix
+  void new SpanRuler({ entitiesFilter: 'spacy.first_longest_spans_filter.v1' });
+  spans.add([{ label: 'ORG', id: '', phrase: document }]);
+  // @ts-expect-error a span pattern has token conditions or a phrase, not both
+  spans.add([{ label: 'ORG', tokens: { tokens: [] }, phrase: document }]);
+  // @ts-expect-error a span phrase is a processed document, not text
+  spans.add([{ label: 'ORG', phrase: 'Acme' }]);
   void downloadModel('en_core_web_lg');
   // @ts-expect-error downloadModel installs only official pipelines
   void downloadModel('en_core_web_xl');

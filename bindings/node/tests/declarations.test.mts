@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { restrictConstructor, addEntityPatternTypes, addSpanGroupTypes, addMatcherLoaders, addExecutionLoader, addExecutionTypes, addVocabularyTypes, replaceInterface } from '../scripts/declarations.mts';
+import { restrictConstructor, addEntityPatternTypes, addSpanGroupTypes, addSpanRulerTypes, addMatcherLoaders, addExecutionLoader, addExecutionTypes, addVocabularyTypes, replaceInterface } from '../scripts/declarations.mts';
 
 test('declaration correction preserves methods and rejects unexpected generator changes', () => {
   const source = 'export declare class Model {\n  process(text: string): Promise<Document>\n}';
@@ -28,10 +28,11 @@ test('execution wrapper is generated once and rejects changed loader contracts',
 
 test('matcher and ruler wrappers are installed once each', () => {
   const loader = addMatcherLoaders('');
-  for (const name of ['PhraseMatcher', 'TokenMatcher', 'DependencyMatcher', 'EntityRuler']) {
+  for (const name of ['PhraseMatcher', 'TokenMatcher', 'DependencyMatcher', 'EntityRuler', 'SpanRuler']) {
     assert.equal(loader.split(`module.exports.${name},`).length - 1, 1, name);
   }
   assert.match(loader, /installEntityRuler\(module\.exports\.EntityRuler, module\.exports\.NativeDocument\)/);
+  assert.match(loader, /installSpanRuler\(module\.exports\.SpanRuler, module\.exports\.NativeDocument\)/);
   assert.equal(loader.split('installDocument(module.exports.NativeDocument)').length - 1, 1);
   assert.equal(addMatcherLoaders(loader), loader);
 });
@@ -48,6 +49,14 @@ test('entity pattern types are appended once', () => {
   const declaration = addEntityPatternTypes('');
   assert.match(declaration, /export type EntityPattern = EntityTokenPattern \| EntityPhrasePattern/);
   assert.equal(addEntityPatternTypes(declaration), declaration);
+});
+
+test('span ruler types are appended once', () => {
+  const declaration = addSpanRulerTypes('');
+  assert.match(declaration, /export type SpanFilter = 'first_longest' \| 'prioritize_new' \| 'prioritize_existing'/);
+  assert.match(declaration, /export type SpanPattern = SpanTokenPattern \| SpanPhrasePattern/);
+  assert.match(declaration, /export interface SpanRulerOptions/);
+  assert.equal(addSpanRulerTypes(declaration), declaration);
 });
 
 test('interface replacement checks the generated fields and runs once', () => {

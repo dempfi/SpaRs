@@ -7,8 +7,8 @@ pub struct Document {
     pub text: String,
     pub tokens: Vec<Token>,
     #[napi(ts_type = "Array<Span<EntityLabel>>")]
-    /// Null until `Ner` runs, or until `NativeDocument.withEntities` or `EntityRuler.annotate` sets
-    /// entities; null again if an update leaves every token's entity annotation missing.
+    /// Null until `Ner` runs, or until `NativeDocument.withEntities`, `EntityRuler.annotate` or
+    /// `SpanRuler.annotate` with `annotateEntities` sets entities; null again if an update leaves every token's entity annotation missing.
     pub entities: Option<Vec<Span>>,
     #[napi(ts_type = "Array<Span<'', ''>>")]
     /// Null until `Parser` runs.
@@ -18,7 +18,7 @@ pub struct Document {
     pub noun_chunks: Option<Vec<Span>>,
     /// Named span groups, like spaCy's `Doc.spans`, in the order their keys were added; replacing
     /// a group keeps its position. Empty unless set with `NativeDocument.withSpanGroup` or
-    /// restored from a snapshot.
+    /// `SpanRuler.annotate`, or restored from a snapshot.
     pub span_groups: Vec<SpanGroup>,
 }
 

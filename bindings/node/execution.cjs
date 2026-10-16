@@ -294,36 +294,65 @@ function installMatcher(Matcher, NativeDocument, kind) {
 }
 
 /**
- * Queue ruler searches like matcher searches, and reject pattern changes while one is pending.
- * @param {typeof import('./index.js').EntityRuler} EntityRuler
- * @param {typeof import('./index.js').NativeDocument} NativeDocument
+ * @typedef {{
+ *   findMatches(doc: import('./index.js').NativeDocument): Promise<unknown>;
+ *   annotate(doc: import('./index.js').NativeDocument): Promise<unknown>;
+ *   add(patterns: unknown): void;
+ *   remove(value: string): void;
+ *   clear(): void;
+ *   removeById?: (id: string) => void;
+ * }} RulerPrototype
  */
-function installEntityRuler(EntityRuler, NativeDocument) {
-  const prototype = EntityRuler.prototype;
+
+/**
+ * Queue ruler searches like matcher searches, check patterns before the native code reads them,
+ * and reject pattern changes while a search is pending.
+ * @param {{ prototype: RulerPrototype; [Symbol.hasInstance](value: unknown): boolean }} Ruler
+ * @param {typeof import('./index.js').NativeDocument} NativeDocument
+ * @param {'entity' | 'span'} kind
+ */
+function installRuler(Ruler, NativeDocument, kind) {
+  const prototype = Ruler.prototype;
   if (installed.has(prototype)) return;
   installed.add(prototype);
-  const add = prototype.add;
-  const remove = prototype.remove;
-  const clear = prototype.clear;
-  const assertMutable = guardSearches(prototype, EntityRuler, NativeDocument, ['findMatches', 'annotate']);
+  const { add, remove, clear, removeById } = prototype;
+  const assertMutable = guardSearches(prototype, Ruler, NativeDocument, ['findMatches', 'annotate']);
+  /** @param {string} message */
+  const invalid = message => Object.assign(new Error(message), { code: 'SPARS_INVALID_PATTERN' });
   prototype.add = function(patterns) {
     assertMutable(this);
     for (const value of patternArray(patterns)) {
       const pattern = patternRecord(value, ['label', 'id', 'tokens', 'phrase']);
       if (typeof pattern.label !== 'string' || (pattern.id != null && typeof pattern.id !== 'string')) {
-        throw Object.assign(new Error('An entity pattern label and id must be strings'), { code: 'SPARS_INVALID_PATTERN' });
+        throw invalid(`A ${kind} pattern label and id must be strings`);
       }
       const tokens = pattern.tokens != null;
       const phrase = pattern.phrase != null;
-      if (tokens === phrase) throw Object.assign(new Error('An entity pattern needs exactly one of tokens and phrase'), { code: 'SPARS_INVALID_PATTERN' });
+      if (tokens === phrase) throw invalid(`A ${kind} pattern needs exactly one of tokens and phrase`);
       if (tokens) validatePatterns([pattern.tokens], 'token');
-      else if (!(pattern.phrase instanceof NativeDocument)) throw Object.assign(new Error('An entity phrase must be a NativeDocument'), { code: 'SPARS_INVALID_PATTERN' });
+      else if (!(pattern.phrase instanceof NativeDocument)) throw invalid(`A ${kind} phrase must be a NativeDocument`);
     }
     add.call(this, patterns);
   };
-  prototype.remove = function(id) { assertMutable(this); remove.call(this, id); };
+  prototype.remove = function(value) { assertMutable(this); remove.call(this, value); };
   prototype.clear = function() { assertMutable(this); clear.call(this); };
+  if (kind === 'span') {
+    if (typeof removeById !== 'function') throw new TypeError('Expected a native removeById method');
+    prototype.removeById = function(id) { assertMutable(this); removeById.call(this, id); };
+  }
 }
+
+/**
+ * @param {typeof import('./index.js').EntityRuler} EntityRuler
+ * @param {typeof import('./index.js').NativeDocument} NativeDocument
+ */
+function installEntityRuler(EntityRuler, NativeDocument) { installRuler(EntityRuler, NativeDocument, 'entity'); }
+
+/**
+ * @param {typeof import('./index.js').SpanRuler} SpanRuler
+ * @param {typeof import('./index.js').NativeDocument} NativeDocument
+ */
+function installSpanRuler(SpanRuler, NativeDocument) { installRuler(SpanRuler, NativeDocument, 'span'); }
 
 /**
  * Pass span group attrs to the native code as JSON text, which keeps their key order, and parse them back in
@@ -444,4 +473,4 @@ function validatePatterns(value, kind) {
   }
 }
 
-module.exports = { ERROR_CODES, OFFICIAL_MODEL_NAMES, Scheduler, configureExecution, configureInputLimits, install, installDocument, installEntityRuler, installMatcher, isOfficialModelName, isSparsError };
+module.exports = { ERROR_CODES, OFFICIAL_MODEL_NAMES, Scheduler, configureExecution, configureInputLimits, install, installDocument, installEntityRuler, installMatcher, installSpanRuler, isOfficialModelName, isSparsError };
