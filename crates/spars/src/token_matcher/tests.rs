@@ -1,5 +1,6 @@
 use super::*;
 use crate::Token;
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 fn doc(text: &str) -> Doc {
@@ -1050,4 +1051,60 @@ fn missing_annotations_are_reported_in_spacy_order() {
         set_annotation(&mut document.tokens[0], attribute, Some(value));
     }
     assert!(starts(&matcher, &document).is_ok());
+}
+
+#[test]
+fn batch_removal_keeps_indexed_starts_consistent() {
+    let item = |attribute, value: &str, repetition| TokenPatternItem {
+        constraints: vec![TokenConstraint {
+            attribute,
+            predicate: crate::Predicate::Equals {
+                value: value.into(),
+            },
+        }],
+        repetition,
+    };
+    use crate::TokenAttribute::{Lower, Norm, Text};
+    // Indexed and unindexed first items, several patterns per rule, removed rules interleaved
+    // with kept ones.
+    let rules: Vec<(String, Vec<TokenPattern>)> = (0..12)
+        .map(|i| {
+            let attribute = [Text, Lower, Norm][i % 3];
+            let repetition = [Repetition::Once, Repetition::Optional][i % 2];
+            let patterns = (0..1 + i % 3)
+                .map(|j| TokenPattern {
+                    tokens: vec![item(attribute, ["x", "y"][(i + j) % 2], repetition)],
+                })
+                .collect();
+            (format!("r{i}"), patterns)
+        })
+        .collect();
+    let mut matcher = TokenMatcher::new();
+    for (name, patterns) in &rules {
+        matcher.add(name.clone(), patterns.clone()).unwrap();
+    }
+    let removed: HashSet<&str> = ["r1", "r4", "r5", "r10", "unknown"].into();
+    matcher.remove_all(&removed);
+    let mut fresh = TokenMatcher::new();
+    for (name, patterns) in rules
+        .iter()
+        .filter(|(name, _)| !removed.contains(name.as_str()))
+    {
+        fresh.add(name.clone(), patterns.clone()).unwrap();
+    }
+    assert_eq!(matcher.len(), fresh.len());
+    assert!(!matcher.contains("r4") && matcher.contains("r2"));
+    for text in ["x", "xy", "yxy", "xxyy"] {
+        let found = spans(&matcher, text);
+        assert_eq!(found, spans(&fresh, text), "{text}");
+        assert_eq!(
+            outcome(matcher.find_matches_unindexed(&doc(text))),
+            Ok(found),
+            "{text}"
+        );
+    }
+    // Rules added after a batch removal are indexed at the end.
+    matcher.add("late", rules[0].1.clone()).unwrap();
+    fresh.add("late", rules[0].1.clone()).unwrap();
+    assert_eq!(spans(&matcher, "xy"), spans(&fresh, "xy"));
 }

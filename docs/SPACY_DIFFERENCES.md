@@ -178,3 +178,15 @@ print([s.text for s in doc.spans["g"]])  # ['a', 'c'], expected ['a', 'b']
 ```
 
 The cause is `self.c.erase(self.c.begin() + i - 1)` in `SpanGroup.__delitem__`; erasing `self.c.begin() + i` fixes it.
+
+## SpanRuler
+
+These apply to the Rust [`SpanRuler`](SPAN_RULER.md). Its other behavior follows spaCy, including the ordering of identical spans by string-store hashes and the repeated spans a filter adds to an existing group, so neither is listed here. The unit tests are in `crates/spars/src/span_ruler/tests.rs`; run them with `cargo test --release --offline -p spars-nlp --lib span_ruler`.
+
+### Failed additions change nothing
+
+- **spaCy:** `SpanRuler.add_patterns` walks the patterns once: it records each pattern's label and ID, adds a token pattern to the matcher, then lists the pattern; phrases are added to the phrase matcher after the walk. An invalid token pattern raises at that pattern: earlier token patterns match, earlier phrases are listed and counted by `len` but never match, the rejected and later patterns are not listed, and the labels up to and including the rejected pattern are recorded, so `label in ruler` reports the rejected label. A phrase rejected for missing annotation raises after every pattern of the call is listed and every label recorded, with every token pattern and the earlier phrases added to their matchers.
+- **SpaRs:** `add` checks every pattern first and returns an error without changing the ruler, including the labels `contains` reports.
+- **Reason:** a caller that handles the error can keep using the ruler without inspecting what was partly changed, as with the [EntityRuler](#failed-additions-and-removals-change-nothing). `remove` and `remove_by_id` already check before changing anything in spaCy, so they need no difference.
+- **Effect:** after a failed `add`, SpaRs matches and lists what it did before the call; spaCy may match more, list patterns that never match, and report labels of patterns it did not add.
+- **Tests:** `invalid_additions_change_nothing`, `phrase_attributes_validate_pattern_documents`.

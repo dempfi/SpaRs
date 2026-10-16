@@ -160,6 +160,7 @@ class Ruler(Component, Protocol):
 
 class Strings(Protocol):
     def __getitem__(self, key: int) -> str: ...
+    def add(self, string: str) -> int: ...
 
 class Vectors(Protocol):
     data: FloatArray

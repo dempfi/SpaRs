@@ -7,7 +7,7 @@ use crate::dependency_matcher::predicates::{
 use crate::{Doc, Error, Lexicon, Result, TokenConstraint, TokenIndex};
 use serde::{Deserialize, Serialize};
 use start_index::StartIndex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// An ordered sequence of token conditions.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -173,6 +173,37 @@ impl TokenMatcher {
             });
         }
         Ok(())
+    }
+    /// Remove every registered rule in `names`, ignoring unknown names, in one pass over the rules
+    /// and compiled patterns; removing rules one at a time costs a pass each.
+    pub(crate) fn remove_all(&mut self, names: &HashSet<&str>) {
+        let mut kept = vec![true; self.rules.len()];
+        self.index.retain(|name, &mut position| {
+            let keep = !names.contains(name.as_str());
+            kept[position] = keep;
+            keep
+        });
+        // Each kept rule moves down by the number of removed rules before it.
+        let mut shift = Vec::with_capacity(kept.len());
+        let mut dropped = 0;
+        for &keep in &kept {
+            shift.push(dropped);
+            dropped += usize::from(!keep);
+        }
+        for position in self.index.values_mut() {
+            *position -= shift[*position];
+        }
+        let mut position = 0;
+        self.rules.retain(|_| {
+            position += 1;
+            kept[position - 1]
+        });
+        let removed: Vec<usize> = (0..self.compiled.len())
+            .filter(|&position| names.contains(self.compiled[position].name.as_str()))
+            .collect();
+        self.starts.remove(&removed);
+        self.compiled
+            .retain(|pattern| !names.contains(pattern.name.as_str()));
     }
     /// Return every match, overlapping ones included, in spaCy `Matcher` order rather than
     /// sorted by start. A matcher without rules returns no matches and no error.
