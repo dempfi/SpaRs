@@ -1,10 +1,12 @@
 //! Reusable patterns over contiguous tokens, with explicit repetition.
 mod engine;
+mod start_index;
 use crate::dependency_matcher::predicates::{
     compile_conditions, CompiledConditions, LengthChecks, LexicalTest,
 };
 use crate::{Doc, Error, Lexicon, Result, TokenConstraint, TokenIndex};
 use serde::{Deserialize, Serialize};
+use start_index::StartIndex;
 use std::collections::HashMap;
 
 /// An ordered sequence of token conditions.
@@ -62,7 +64,6 @@ struct CompiledPattern {
     nodes: Vec<Node>,
 }
 struct Rule {
-    name: String,
     patterns: Vec<TokenPattern>,
 }
 /// Compile rules once and reuse them across independent document calls.
@@ -72,6 +73,8 @@ pub struct TokenMatcher {
     // The position of each rule in `rules`, so lookups do not scan every rule.
     index: HashMap<String, usize>,
     compiled: Vec<CompiledPattern>,
+    // Kept consistent with `compiled` by `add` and `remove`.
+    starts: StartIndex,
     lexicon: Option<Lexicon>,
 }
 impl TokenMatcher {
@@ -111,11 +114,14 @@ impl TokenMatcher {
         if let Some(&i) = self.index.get(&name) {
             self.rules[i].patterns.extend(patterns);
         } else {
-            self.index.insert(name.clone(), self.rules.len());
-            self.rules.push(Rule { name, patterns });
+            self.index.insert(name, self.rules.len());
+            self.rules.push(Rule { patterns });
         }
         // This order includes later additions to an already registered rule.
-        self.compiled.extend(compiled);
+        for pattern in compiled {
+            self.starts.push(self.compiled.len(), &pattern);
+            self.compiled.push(pattern);
+        }
         Ok(())
     }
     /// Return the error [`TokenMatcher::add`] would return for these patterns, without adding them.
@@ -144,16 +150,48 @@ impl TokenMatcher {
             .index
             .remove(name)
             .ok_or_else(|| Error::Pattern(format!("unknown token rule {name:?}")))?;
-        self.rules.remove(index);
-        for later in &self.rules[index..] {
-            *self.index.get_mut(&later.name).expect("indexed rule") -= 1;
+        // Each registered pattern has exactly one compiled pattern.
+        let count = self.rules.remove(index).patterns.len();
+        // Visiting the values directly avoids hashing every later rule name.
+        for position in self.index.values_mut() {
+            if *position > index {
+                *position -= 1;
+            }
         }
-        self.compiled.retain(|pattern| pattern.name != name);
+        let removed: Vec<usize> = (0..self.compiled.len())
+            .filter(|&position| self.compiled[position].name == name)
+            .take(count)
+            .collect();
+        self.starts.remove(&removed);
+        if let [only] = removed[..] {
+            self.compiled.remove(only);
+        } else {
+            let mut position = 0;
+            self.compiled.retain(|_| {
+                position += 1;
+                removed.binary_search(&(position - 1)).is_err()
+            });
+        }
         Ok(())
     }
     /// Return overlapping matches in the reference state-machine emission order.
     pub fn find_matches(&self, doc: &Doc) -> Result<Vec<TokenMatch>> {
-        engine::find(&self.compiled, doc, self.lexicon.as_ref())
+        engine::find(
+            &self.compiled,
+            engine::Starts::Indexed(&self.starts),
+            doc,
+            self.lexicon.as_ref(),
+        )
+    }
+    /// The same search, starting every pattern at every token as spaCy does.
+    #[cfg(test)]
+    fn find_matches_unindexed(&self, doc: &Doc) -> Result<Vec<TokenMatch>> {
+        engine::find(
+            &self.compiled,
+            engine::Starts::All,
+            doc,
+            self.lexicon.as_ref(),
+        )
     }
 }
 fn compile(name: &str, pattern: &TokenPattern) -> Result<CompiledPattern> {

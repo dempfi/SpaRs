@@ -1,3 +1,4 @@
+use super::start_index::StartIndex;
 use super::{CompiledPattern, Quantifier, TokenMatch};
 use crate::dependency_matcher::predicates::{Needs, TokenValues};
 use crate::{Doc, Lexicon, Result, TokenIndex};
@@ -10,8 +11,19 @@ struct State {
     start: usize,
 }
 
+/// Which patterns receive a new state at each token.
+#[derive(Clone, Copy)]
+pub(super) enum Starts<'a> {
+    /// Only patterns whose first node can match the token, from the matcher's index.
+    Indexed(&'a StartIndex),
+    /// Every pattern with nodes, as spaCy does; the reference for the indexed path.
+    #[cfg(test)]
+    All,
+}
+
 pub(super) fn find(
     patterns: &[CompiledPattern],
+    starts: Starts<'_>,
     doc: &Doc,
     lexicon: Option<&Lexicon>,
 ) -> Result<Vec<TokenMatch>> {
@@ -39,9 +51,9 @@ pub(super) fn find(
     // For short patterns the extra lookup costs more than repeated suffix work.
     // Separate compiled paths keep ordinary matching free of per-state overhead.
     if patterns.iter().any(needs_suffix_cache) {
-        run::<true>(patterns, doc, &values)
+        run::<true>(patterns, starts, doc, &values)
     } else {
-        run::<false>(patterns, doc, &values)
+        run::<false>(patterns, starts, doc, &values)
     }
 }
 
@@ -58,6 +70,7 @@ fn needs_suffix_cache(pattern: &CompiledPattern) -> bool {
 #[inline(never)]
 fn run<const CACHE_SUFFIXES: bool>(
     patterns: &[CompiledPattern],
+    starts: Starts<'_>,
     doc: &Doc,
     values: &TokenValues<'_>,
 ) -> Result<Vec<TokenMatch>> {
@@ -75,6 +88,11 @@ fn run<const CACHE_SUFFIXES: bool>(
     let mut output = Vec::new();
     let mut cache: Vec<Vec<Option<bool>>> =
         patterns.iter().map(|p| vec![None; p.items.len()]).collect();
+    // Patterns with cached item results at the current token, so the reset at the next
+    // token visits only them instead of every registered pattern.
+    let mut touched: Vec<usize> = Vec::new();
+    let mut dirty = vec![false; patterns.len()];
+    let mut candidates = Vec::new();
     let mut emit = |pattern: usize, start: usize, end: usize| {
         if start < end && seen.insert((patterns[pattern].name.as_str(), start, end)) {
             output.push(TokenMatch {
@@ -86,19 +104,31 @@ fn run<const CACHE_SUFFIXES: bool>(
     };
     for index in 0..doc.tokens().len() {
         visited.clear();
-        for values in &mut cache {
-            values.fill(None);
+        for pattern in touched.drain(..) {
+            cache[pattern].fill(None);
+            dirty[pattern] = false;
         }
-        states.extend(
-            (0..patterns.len())
-                .filter(|&pattern| !patterns[pattern].nodes.is_empty())
-                .map(|pattern| State {
-                    pattern,
-                    node: 0,
-                    start: index,
-                }),
-        );
         let token = doc.token(TokenIndex(index))?;
+        // New states follow the states carried from earlier tokens, in pattern order.
+        match starts {
+            Starts::Indexed(start_index) => start_index.candidates(token, values, &mut candidates),
+            #[cfg(test)]
+            Starts::All => {
+                // The reference also clears every pattern's cache, as before indexing.
+                for values in &mut cache {
+                    values.fill(None);
+                }
+                candidates.clear();
+                candidates.extend(
+                    (0..patterns.len()).filter(|&pattern| !patterns[pattern].nodes.is_empty()),
+                );
+            }
+        }
+        states.extend(candidates.iter().map(|&pattern| State {
+            pattern,
+            node: 0,
+            start: index,
+        }));
         for mut state in states.drain(..) {
             let pattern = &patterns[state.pattern];
             loop {
@@ -124,6 +154,10 @@ fn run<const CACHE_SUFFIXES: bool>(
                         }
                     }
                     cache[state.pattern][node.item] = Some(value);
+                    if !dirty[state.pattern] {
+                        dirty[state.pattern] = true;
+                        touched.push(state.pattern);
+                    }
                     value
                 };
                 let final_node = state.node + 1 == pattern.nodes.len();
