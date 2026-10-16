@@ -22,7 +22,12 @@ fn compile(constraints: &[TokenConstraint]) -> Result<Compiled> {
 use crate::{Token, TokenIndex};
 
 fn doc() -> Doc {
-    let mut token = Token::new(0, 1, 0, "x".into());
+    let mut token = Token::new(
+        crate::ByteOffset(0),
+        crate::ByteOffset(1),
+        crate::CodePointOffset(0),
+        "x".into(),
+    );
     token.morphology = Some("Case=Acc,Nom|Number=Sing".into());
     Doc {
         text: "x".into(),
@@ -31,6 +36,7 @@ fn doc() -> Doc {
         sentences: None,
         noun_chunks: None,
         tensor: Vec::new(),
+        span_groups: Default::default(),
         dependency_index: Default::default(),
     }
 }
@@ -159,13 +165,24 @@ fn lower_needs_no_annotations_and_compares_pattern_values_as_written() {
     let doc = Doc {
         text: text.into(),
         tokens: vec![
-            Token::new(0, 4, 0, "ΟΣ".into()),
-            Token::new(5, 8, 3, "The".into()),
+            Token::new(
+                crate::ByteOffset(0),
+                crate::ByteOffset(4),
+                crate::CodePointOffset(0),
+                "ΟΣ".into(),
+            ),
+            Token::new(
+                crate::ByteOffset(5),
+                crate::ByteOffset(8),
+                crate::CodePointOffset(3),
+                "The".into(),
+            ),
         ],
         entities: None,
         sentences: None,
         noun_chunks: None,
         tensor: Vec::new(),
+        span_groups: Default::default(),
         dependency_index: Default::default(),
     };
     let check = |predicate: Predicate, index: usize| {
@@ -275,13 +292,24 @@ fn lower_set_values_are_not_lowercased_and_cache_is_filled_only_when_needed() {
     let doc = Doc {
         text: "ΟΣ The".into(),
         tokens: vec![
-            Token::new(0, 4, 0, "ΟΣ".into()),
-            Token::new(5, 8, 3, "The".into()),
+            Token::new(
+                crate::ByteOffset(0),
+                crate::ByteOffset(4),
+                crate::CodePointOffset(0),
+                "ΟΣ".into(),
+            ),
+            Token::new(
+                crate::ByteOffset(5),
+                crate::ByteOffset(8),
+                crate::CodePointOffset(3),
+                "The".into(),
+            ),
         ],
         entities: None,
         sentences: None,
         noun_chunks: None,
         tensor: Vec::new(),
+        span_groups: Default::default(),
         dependency_index: Default::default(),
     };
     let values = TokenValues::new(
@@ -460,7 +488,12 @@ fn length_counts_code_points_and_compares_like_spacy() {
     let mut tokens = Vec::new();
     let (mut start, mut idx) = (0, 0);
     for word in words {
-        tokens.push(Token::new(start, start + word.len(), idx, word.into()));
+        tokens.push(Token::new(
+            crate::ByteOffset(start),
+            crate::ByteOffset(start + word.len()),
+            crate::CodePointOffset(idx),
+            word.into(),
+        ));
         start += word.len() + 1;
         idx += word.chars().count() + 1;
     }
@@ -471,6 +504,7 @@ fn length_counts_code_points_and_compares_like_spacy() {
         sentences: None,
         noun_chunks: None,
         tensor: Vec::new(),
+        span_groups: Default::default(),
         dependency_index: Default::default(),
     };
     let values = TokenValues::new(
@@ -963,22 +997,20 @@ fn malformed_set_conditions_are_rejected() {
     }
 }
 #[test]
-fn set_predicates_still_require_their_annotation() {
-    // Even an always-true `IsSuperset []` validates that the annotation exists.
-    for (attribute, name) in [
-        (TokenAttribute::Pos, "POS"),
-        (TokenAttribute::Lemma, "lemma"),
-    ] {
-        let constraint = TokenConstraint {
-            attribute,
-            predicate: Predicate::IsSuperset { values: vec![] },
+fn set_predicates_do_not_require_their_annotation() {
+    // spaCy 3.8.14 raises E155 only for direct equality: on a document without lemmas or POS,
+    // `IS_SUPERSET: []` matches every token. A one-value list compiles like equality but
+    // also never requires the annotation. `doc()` has neither annotation.
+    for attribute in [TokenAttribute::Pos, TokenAttribute::Lemma] {
+        for values in [vec![], vec!["x".to_owned()]] {
+            let constraint = TokenConstraint {
+                attribute,
+                predicate: Predicate::IsSuperset { values },
+            }
+            .compile()
+            .unwrap();
+            constraint.validate_document(&doc()).unwrap();
         }
-        .compile()
-        .unwrap();
-        assert!(matches!(
-            constraint.validate_document(&doc()),
-            Err(Error::MissingAnnotation(missing)) if missing == name
-        ));
     }
 }
 #[test]

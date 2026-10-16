@@ -9,12 +9,69 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  # Select jobs from the changed paths. The workflow itself always runs, because the release
+  # scripts require a successful push run of ci.yml for the released commit. If the changed paths
+  # cannot be listed, every job runs; if this job fails, the required gate fails.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+      native: ${{ steps.classify.outputs.native }}
+      os: ${{ steps.classify.outputs.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: List changed paths
+        id: list
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BRANCH: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          listing="$RUNNER_TEMP/changed-paths.txt"
+          base=""
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            # A pull request checks out its merge commit, whose first parent is the base branch.
+            base=HEAD^1
+          else
+            # Compare a push with the last commit whose push run succeeded, not the previous push,
+            # so changes from a cancelled or failed run are checked again. Every successful run
+            # covered the changes since an earlier successful run, so all changes stay covered.
+            verified=$(gh api "repos/$REPOSITORY/actions/workflows/ci.yml/runs?branch=$BRANCH&event=push&status=success&per_page=1" \
+              --jq '.workflow_runs[0].head_sha // ""') || verified=""
+            if [[ "$verified" =~ ^[0-9a-f]{40}$ ]] && git fetch --no-tags --depth=1 origin "$verified"; then
+              base="$verified"
+            fi
+          fi
+          if [[ -n "$base" ]] && git diff --name-only --no-renames "$base" HEAD > "$listing"; then
+            echo "listing=$listing" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Could not list changed paths; running every job"
+          fi
+      - name: Select jobs
+        id: classify
+        env:
+          LISTING: ${{ steps.list.outputs.listing }}
+        run: node .github/scripts/ci-changes.cjs ${LISTING:+"$LISTING"} | tee -a "$GITHUB_OUTPUT"
+
   reference-and-rust:
     name: reference-and-rust (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        os: ${{ fromJSON(needs.changes.outputs.os) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -30,14 +87,14 @@ jobs:
             . -> target
             consumer -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       - name: Install Linux verification tools
         if: runner.os == 'Linux'
         run: npm --prefix tools ci --ignore-scripts --no-audit --no-fund
       - run: npm --prefix bindings/node ci --ignore-scripts --no-audit --no-fund
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - run: uv venv --python 3.12.5 .venv
       - run: uv pip sync --python .venv/bin/python tools/reference-requirements.lock
       - run: .venv/bin/python tools/acquire.py --all
@@ -70,7 +127,7 @@ jobs:
       - name: Record performance separately from fidelity
         if: runner.os == 'Linux'
         run: .venv/bin/python tools/benchmark.py
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: fidelity-reports-${{ matrix.os }}
@@ -78,6 +135,8 @@ jobs:
           retention-days: 14
 
   native-installation:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -91,7 +150,7 @@ jobs:
             . -> target
             consumer -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       - run: npm --prefix bindings/node ci --ignore-scripts --no-audit --no-fund
@@ -111,13 +170,34 @@ jobs:
           done
 
   release-tooling:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       - run: npm --prefix tools ci --ignore-scripts --no-audit --no-fund
       - run: node --test .github/scripts/*.test.cjs bindings/node/tests/release-assets.test.mts bindings/node/tests/release-publish.test.mts
+
+  # The single required status check. It passes only when every selected job succeeded and every
+  # unselected job was skipped, and fails when the job selection failed or a run was cancelled.
+  # Matrix jobs skipped as a whole never report their per-OS names, so branch rules must require
+  # this job rather than the individual jobs.
+  required:
+    name: CI required
+    if: always()
+    needs: [changes, reference-and-rust, native-installation, release-tooling]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the selected jobs
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: node .github/scripts/ci-changes.cjs gate

@@ -1,5 +1,6 @@
 use super::*;
 use crate::Token;
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 fn doc(text: &str) -> Doc {
@@ -8,12 +9,20 @@ fn doc(text: &str) -> Doc {
         tokens: text
             .char_indices()
             .enumerate()
-            .map(|(cp, (i, c))| Token::new(i, i + c.len_utf8(), cp, c.to_string()))
+            .map(|(cp, (i, c))| {
+                Token::new(
+                    crate::ByteOffset(i),
+                    crate::ByteOffset(i + c.len_utf8()),
+                    crate::CodePointOffset(cp),
+                    c.to_string(),
+                )
+            })
             .collect(),
         entities: None,
         sentences: None,
         noun_chunks: None,
         tensor: Vec::new(),
+        span_groups: Default::default(),
         dependency_index: OnceLock::new(),
     }
 }
@@ -259,4 +268,843 @@ fn lexical_flags_require_a_lexicon_and_registration_stays_atomic() {
     assert_eq!(matcher.get("text").unwrap().len(), 1);
     assert!(!matcher.contains("number"));
     assert_eq!(spans(&matcher, "x"), vec![("text".into(), 0, 1)]);
+}
+
+// A small deterministic generator, so failures reproduce from the printed seed.
+struct Xorshift(u64);
+impl Xorshift {
+    fn below(&mut self, bound: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        usize::try_from(self.0 % u64::try_from(bound).unwrap()).unwrap()
+    }
+    fn pick<'a>(&mut self, values: &[&'a str]) -> &'a str {
+        values[self.below(values.len())]
+    }
+}
+
+// Unicode words whose Python lowercase differs from a per-character mapping, and words that
+// differ only in case, so `Lower` keys and token values meet in both directions.
+const WORDS: [&str; 14] = [
+    "a", "A", "ab", "AB", "b", "İ", "i̇", "Σ", "σ", "ς", "ẞ", "ß", "ǅ", "x",
+];
+
+fn words_doc(words: &[&str], norms: &[&str], lemmas: bool) -> Doc {
+    let text = words.join(" ");
+    let (mut start, mut cp) = (0, 0);
+    let tokens = words
+        .iter()
+        .zip(norms)
+        .enumerate()
+        .map(|(i, (word, norm))| {
+            let mut token = Token::new(
+                crate::ByteOffset(start),
+                crate::ByteOffset(start + word.len()),
+                crate::CodePointOffset(cp),
+                (*norm).into(),
+            );
+            token.whitespace = i + 1 < words.len();
+            token.lemma = lemmas.then(|| norm.to_lowercase());
+            start += word.len() + 1;
+            cp += word.chars().count() + 1;
+            token
+        })
+        .collect();
+    Doc {
+        text,
+        tokens,
+        entities: None,
+        sentences: None,
+        noun_chunks: None,
+        tensor: Vec::new(),
+        span_groups: Default::default(),
+        dependency_index: OnceLock::new(),
+    }
+}
+
+fn random_constraint(rng: &mut Xorshift) -> TokenConstraint {
+    use crate::{Comparison, FiniteNumber, Predicate, TokenAttribute};
+    if rng.below(12) == 0 {
+        return TokenConstraint {
+            attribute: TokenAttribute::Length,
+            predicate: Predicate::Compare {
+                operator: [Comparison::LessOrEqual, Comparison::Greater][rng.below(2)],
+                value: FiniteNumber::new(1.0).unwrap(),
+            },
+        };
+    }
+    let attribute = [
+        TokenAttribute::Text,
+        TokenAttribute::Lower,
+        TokenAttribute::Norm,
+        TokenAttribute::Lemma,
+    ][rng.below(4)];
+    let values = |rng: &mut Xorshift| -> Vec<String> {
+        (0..rng.below(4)).map(|_| rng.pick(&WORDS).into()).collect()
+    };
+    let predicate = match rng.below(7) {
+        0..=2 => Predicate::Equals {
+            value: rng.pick(&WORDS).into(),
+        },
+        3 => Predicate::In {
+            values: values(rng),
+        },
+        4 => Predicate::NotIn {
+            values: values(rng),
+        },
+        5 => Predicate::IsSubset {
+            values: values(rng),
+        },
+        _ => Predicate::IsSuperset {
+            values: values(rng),
+        },
+    };
+    TokenConstraint {
+        attribute,
+        predicate,
+    }
+}
+
+fn random_pattern(rng: &mut Xorshift) -> TokenPattern {
+    let repetitions = [
+        Repetition::Once,
+        Repetition::Once,
+        Repetition::Once,
+        Repetition::OneOrMore,
+        Repetition::Optional,
+        Repetition::ZeroOrMore,
+        Repetition::Negated,
+        Repetition::Range {
+            min: 0,
+            max: Some(0),
+        },
+        Repetition::Range {
+            min: 2,
+            max: Some(3),
+        },
+        Repetition::Range { min: 1, max: None },
+        // Nine optional nodes select the engine's suffix-cache path.
+        Repetition::Range {
+            min: 1,
+            max: Some(10),
+        },
+    ];
+    let mut tokens: Vec<TokenPatternItem> = (0..1 + rng.below(3))
+        .map(|_| TokenPatternItem {
+            constraints: (0..rng.below(3)).map(|_| random_constraint(rng)).collect(),
+            repetition: repetitions[rng.below(repetitions.len())],
+        })
+        .collect();
+    // Occasionally make the pattern invalid, so a rejected `add` must leave the index unchanged.
+    if rng.below(20) == 0 {
+        tokens.push(TokenPatternItem {
+            constraints: Vec::new(),
+            repetition: Repetition::Range {
+                min: 3,
+                max: Some(1),
+            },
+        });
+    }
+    TokenPattern { tokens }
+}
+
+type Outcome = std::result::Result<Vec<(String, usize, usize)>, String>;
+fn outcome(result: Result<Vec<TokenMatch>>) -> Outcome {
+    result
+        .map(|matches| {
+            matches
+                .into_iter()
+                .map(|m| (m.rule, m.start.0, m.end.0))
+                .collect()
+        })
+        .map_err(|error| format!("{error:?}"))
+}
+
+#[test]
+fn indexed_starts_match_starting_every_pattern_at_every_token() {
+    let mut compared = 0;
+    let mut nonempty = 0;
+    let mut errors = 0;
+    let mut rejected = 0;
+    // Matches from rules whose every pattern is reached only through the value index.
+    let mut indexed_matches = 0;
+    for seed in 1..=300u64 {
+        let mut rng = Xorshift(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+        let docs: Vec<Doc> = (0..6)
+            .map(|_| {
+                // Include empty documents.
+                let length = rng.below(14);
+                let words: Vec<&str> = (0..length).map(|_| rng.pick(&WORDS)).collect();
+                let norms: Vec<&str> = (0..length).map(|_| rng.pick(&WORDS)).collect();
+                words_doc(&words, &norms, rng.below(3) != 0)
+            })
+            .collect();
+        let mut matcher = TokenMatcher::new();
+        let names = ["r0", "r1", "r2", "r3", "r4"];
+        for _ in 0..12 {
+            // Repeated names append patterns; removal renumbers later patterns.
+            let name = rng.pick(&names);
+            if rng.below(4) == 0 && matcher.contains(name) {
+                matcher.remove(name).unwrap();
+            } else {
+                let patterns = (0..1 + rng.below(3))
+                    .map(|_| random_pattern(&mut rng))
+                    .collect();
+                if matcher.add(name, patterns).is_err() {
+                    rejected += 1;
+                }
+            }
+            let indexed_positions = matcher.starts.indexed_positions();
+            let indexed_rule = |rule: &str| {
+                matcher
+                    .compiled
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, pattern)| pattern.name == rule)
+                    .all(|(position, _)| indexed_positions.contains(&position))
+            };
+            for doc in &docs {
+                let indexed = outcome(matcher.find_matches(doc));
+                let reference = outcome(matcher.find_matches_unindexed(doc));
+                assert_eq!(indexed, reference, "seed {seed}, document {:?}", doc.text);
+                compared += 1;
+                match indexed {
+                    Ok(found) if !found.is_empty() => {
+                        nonempty += 1;
+                        indexed_matches += found
+                            .iter()
+                            .filter(|(rule, _, _)| indexed_rule(rule))
+                            .count();
+                    }
+                    Err(_) => errors += 1,
+                    Ok(_) => {}
+                }
+            }
+        }
+    }
+    // The generator must exercise matches, matches that need indexed starts, rejected
+    // registrations, and missing-annotation errors.
+    assert!(nonempty > compared / 4, "{nonempty} of {compared}");
+    assert!(indexed_matches > 1000, "{indexed_matches} indexed matches");
+    assert!(rejected > 10, "{rejected} rejected registrations");
+    assert!(
+        errors > 0 && errors < compared / 2,
+        "{errors} of {compared}"
+    );
+}
+
+#[test]
+fn indexed_patterns_still_report_missing_annotations_without_matching_tokens() {
+    let text = |value: &str| TokenConstraint {
+        attribute: crate::TokenAttribute::Text,
+        predicate: crate::Predicate::Equals {
+            value: value.into(),
+        },
+    };
+    let lemma = TokenConstraint {
+        attribute: crate::TokenAttribute::Lemma,
+        predicate: crate::Predicate::Equals { value: "z".into() },
+    };
+    for tokens in [
+        vec![TokenPatternItem {
+            constraints: vec![text("absent"), lemma.clone()],
+            repetition: Repetition::Once,
+        }],
+        vec![
+            TokenPatternItem {
+                constraints: vec![text("absent")],
+                repetition: Repetition::Once,
+            },
+            TokenPatternItem {
+                constraints: vec![lemma.clone()],
+                repetition: Repetition::Once,
+            },
+        ],
+    ] {
+        let mut matcher = TokenMatcher::new();
+        matcher.add("r", vec![TokenPattern { tokens }]).unwrap();
+        assert!(matches!(
+            matcher.find_matches(&doc("xy")),
+            Err(Error::MissingAnnotation("lemma"))
+        ));
+    }
+}
+
+#[test]
+fn removal_keeps_indexed_starts_in_registration_order() {
+    let exact = |attribute, repetition| TokenPattern {
+        tokens: vec![TokenPatternItem {
+            constraints: vec![TokenConstraint {
+                attribute,
+                predicate: crate::Predicate::Equals { value: "x".into() },
+            }],
+            repetition,
+        }],
+    };
+    // Every pattern emits at the token where it starts, so the output follows pattern order.
+    let checked = |matcher: &TokenMatcher, text: &str| {
+        let found = spans(matcher, text);
+        assert_eq!(
+            outcome(matcher.find_matches_unindexed(&doc(text))),
+            Ok(found.clone())
+        );
+        found
+    };
+    let expected = |rules: &[&str]| -> Vec<(String, usize, usize)> {
+        rules.iter().map(|rule| ((*rule).into(), 0, 1)).collect()
+    };
+    use crate::TokenAttribute::{Lower, Norm, Text};
+    let mut matcher = TokenMatcher::new();
+    matcher
+        .add("a", vec![exact(Text, Repetition::Once)])
+        .unwrap();
+    // Optional first items are not indexed.
+    matcher
+        .add("b", vec![exact(Lower, Repetition::Optional)])
+        .unwrap();
+    matcher
+        .add("c", vec![exact(Norm, Repetition::Once)])
+        .unwrap();
+    matcher
+        .add("a", vec![exact(Lower, Repetition::Once)])
+        .unwrap();
+    assert_eq!(checked(&matcher, "x"), expected(&["a", "b", "c"]));
+    matcher.remove("a").unwrap();
+    assert_eq!(checked(&matcher, "x"), expected(&["b", "c"]));
+    matcher
+        .add("a", vec![exact(Text, Repetition::Once)])
+        .unwrap();
+    assert_eq!(checked(&matcher, "x"), expected(&["b", "c", "a"]));
+    matcher.remove("b").unwrap();
+    assert_eq!(checked(&matcher, "xy"), expected(&["c", "a"]));
+    matcher.remove("c").unwrap();
+    matcher.remove("a").unwrap();
+    assert!(checked(&matcher, "x").is_empty());
+}
+
+#[test]
+fn candidates_are_ascending_distinct_and_exclude_impossible_values() {
+    use crate::dependency_matcher::predicates::{Needs, TokenValues};
+    use crate::TokenAttribute::{Lower, Norm, Text};
+    let exact = |attribute, value: &str, repetition| TokenPattern {
+        tokens: vec![TokenPatternItem {
+            constraints: vec![TokenConstraint {
+                attribute,
+                predicate: crate::Predicate::Equals {
+                    value: value.into(),
+                },
+            }],
+            repetition,
+        }],
+    };
+    let mut matcher = TokenMatcher::new();
+    for (rule, pattern) in [
+        ("text", exact(Text, "A", Repetition::Once)),
+        ("lower", exact(Lower, "a", Repetition::Once)),
+        ("norm", exact(Norm, "b", Repetition::OneOrMore)),
+        // Lowercase text never contains "A", so this pattern never starts.
+        ("never", exact(Lower, "A", Repetition::Once)),
+        ("optional", exact(Text, "z", Repetition::Optional)),
+        ("other", exact(Text, "q", Repetition::Once)),
+    ] {
+        matcher.add(rule, vec![pattern]).unwrap();
+    }
+    let doc = words_doc(&["A"], &["b"], false);
+    let needs = Needs {
+        lower: true,
+        ..Needs::default()
+    };
+    let values = TokenValues::new(&doc, needs, None).unwrap();
+    let mut out = vec![99];
+    matcher
+        .starts
+        .candidates(doc.token(TokenIndex(0)).unwrap(), &values, &mut out);
+    assert_eq!(out, [0, 1, 2, 4]);
+}
+
+#[test]
+fn rejected_registration_leaves_indexed_starts_unchanged() {
+    let text = TokenPatternItem {
+        constraints: vec![TokenConstraint {
+            attribute: crate::TokenAttribute::Text,
+            predicate: crate::Predicate::Equals { value: "x".into() },
+        }],
+        repetition: Repetition::Once,
+    };
+    let invalid = pattern(&[Repetition::Range {
+        min: 3,
+        max: Some(1),
+    }]);
+    let mut matcher = TokenMatcher::new();
+    let valid = TokenPattern { tokens: vec![text] };
+    assert!(matcher.add("bad", vec![valid.clone(), invalid]).is_err());
+    matcher.add("good", vec![valid]).unwrap();
+    let found = spans(&matcher, "xyx");
+    assert_eq!(found, [("good".into(), 0, 1), ("good".into(), 2, 3)]);
+    assert_eq!(
+        outcome(matcher.find_matches_unindexed(&doc("xyx"))),
+        Ok(found)
+    );
+}
+
+fn one_token(
+    attribute: crate::TokenAttribute,
+    predicate: crate::Predicate,
+    repetition: Repetition,
+) -> TokenMatcher {
+    let mut matcher = TokenMatcher::new();
+    matcher
+        .add(
+            "r",
+            vec![TokenPattern {
+                tokens: vec![TokenPatternItem {
+                    constraints: vec![TokenConstraint {
+                        attribute,
+                        predicate,
+                    }],
+                    repetition,
+                }],
+            }],
+        )
+        .unwrap();
+    matcher
+}
+fn starts(matcher: &TokenMatcher, doc: &Doc) -> Result<Vec<usize>> {
+    Ok(matcher
+        .find_matches(doc)?
+        .into_iter()
+        .map(|m| m.start.0)
+        .collect())
+}
+fn values(values: &[&str]) -> Vec<String> {
+    values.iter().map(|&value| value.into()).collect()
+}
+fn set_annotation(token: &mut Token, attribute: crate::TokenAttribute, value: Option<&str>) {
+    let value = value.map(str::to_owned);
+    match attribute {
+        crate::TokenAttribute::Lemma => token.lemma = value,
+        crate::TokenAttribute::Pos => token.pos = value,
+        crate::TokenAttribute::Tag => token.tag = value,
+        crate::TokenAttribute::Dep => token.dep = value,
+        crate::TokenAttribute::Morphology => token.morphology = value,
+        _ => unreachable!("only annotation attributes are set"),
+    }
+}
+
+// Expected starts are spaCy 3.8.14 `Matcher` results for single-token patterns on a
+// three-token `Doc` whose first token alone has the annotation. spaCy raises E155 only when
+// no token has an annotation that a direct-equality condition compares, and reads a missing
+// value as the empty string.
+#[test]
+fn partly_annotated_documents_compare_missing_values_as_empty_like_spacy() {
+    use crate::Predicate::*;
+    for (attribute, annotated) in [
+        (crate::TokenAttribute::Lemma, "x"),
+        (crate::TokenAttribute::Pos, "NOUN"),
+        (crate::TokenAttribute::Tag, "x"),
+        (crate::TokenAttribute::Dep, "x"),
+    ] {
+        let mut document = doc("abc");
+        set_annotation(&mut document.tokens[0], attribute, Some(annotated));
+        let cases: [(crate::Predicate, &[usize]); 11] = [
+            (
+                Equals {
+                    value: annotated.into(),
+                },
+                &[0],
+            ),
+            (
+                IsSuperset {
+                    values: values(&[annotated]),
+                },
+                &[0],
+            ),
+            (Equals { value: "".into() }, &[1, 2]),
+            (
+                In {
+                    values: values(&[""]),
+                },
+                &[1, 2],
+            ),
+            (
+                NotIn {
+                    values: values(&[annotated]),
+                },
+                &[1, 2],
+            ),
+            (
+                NotIn {
+                    values: values(&[""]),
+                },
+                &[0],
+            ),
+            (
+                IsSubset {
+                    values: values(&[""]),
+                },
+                &[1, 2],
+            ),
+            (
+                IsSubset {
+                    values: values(&[annotated]),
+                },
+                &[0],
+            ),
+            (
+                IsSuperset {
+                    values: values(&[""]),
+                },
+                &[1, 2],
+            ),
+            (IsSuperset { values: Vec::new() }, &[0, 1, 2]),
+            (
+                Intersects {
+                    values: values(&[""]),
+                },
+                &[1, 2],
+            ),
+        ];
+        for (predicate, expected) in cases {
+            let label = format!("{attribute:?} {predicate:?}");
+            let matcher = one_token(attribute, predicate, Repetition::Once);
+            assert_eq!(starts(&matcher, &document).unwrap(), expected, "{label}");
+        }
+        // A negated item consumes the tokens whose missing value differs from the pattern.
+        let equals = Equals {
+            value: annotated.into(),
+        };
+        let negated = one_token(attribute, equals, Repetition::Negated);
+        assert_eq!(
+            starts(&negated, &document).unwrap(),
+            [1, 2],
+            "{attribute:?}"
+        );
+    }
+}
+
+// spaCy distinguishes a token without morphology (an unset analysis, compared as `""`) from
+// one with the known-empty analysis `_`. Expected starts are spaCy 3.8.14 results for tokens
+// with `Number=Plur`, the empty analysis, and no morphology.
+#[test]
+fn missing_morphology_differs_from_the_empty_analysis_like_spacy() {
+    use crate::Predicate::*;
+    let mut document = doc("abc");
+    document.tokens[0].morphology = Some("Number=Plur".into());
+    document.tokens[1].morphology = Some(String::new());
+    let plural = || values(&["Number=Plur"]);
+    let cases: [(crate::Predicate, &[usize]); 16] = [
+        (
+            Equals {
+                value: "Number=Plur".into(),
+            },
+            &[0],
+        ),
+        (Equals { value: "".into() }, &[2]),
+        (Equals { value: "_".into() }, &[1]),
+        (
+            In {
+                values: values(&[""]),
+            },
+            &[1],
+        ),
+        (
+            In {
+                values: values(&["_"]),
+            },
+            &[1],
+        ),
+        (
+            NotIn {
+                values: values(&[""]),
+            },
+            &[0, 2],
+        ),
+        (
+            NotIn {
+                values: values(&["_"]),
+            },
+            &[0, 2],
+        ),
+        (NotIn { values: plural() }, &[1, 2]),
+        (IsSubset { values: Vec::new() }, &[1, 2]),
+        (IsSubset { values: plural() }, &[0, 1, 2]),
+        (IsSuperset { values: Vec::new() }, &[0, 1, 2]),
+        (IsSuperset { values: plural() }, &[0]),
+        (Intersects { values: Vec::new() }, &[]),
+        (Intersects { values: plural() }, &[0]),
+        (MorphSuperset { values: plural() }, &[0]),
+        (MorphIntersects { values: plural() }, &[0]),
+    ];
+    for (predicate, expected) in cases {
+        let label = format!("{predicate:?}");
+        let matcher = one_token(
+            crate::TokenAttribute::Morphology,
+            predicate,
+            Repetition::Once,
+        );
+        assert_eq!(starts(&matcher, &document).unwrap(), expected, "{label}");
+    }
+}
+
+// spaCy 3.8.14 raises E155 for a direct-equality condition, including one with the empty
+// string and one under any repetition other than a zero count, when no token has the annotation; an empty lemma, POS, tag or dependency label counts
+// as missing, while the empty morphology analysis counts as present. Membership and set
+// conditions never raise it and compare missing values as empty.
+#[test]
+fn only_equality_requires_an_annotated_token_like_spacy() {
+    use crate::Predicate::*;
+    for (attribute, value, name) in [
+        (crate::TokenAttribute::Lemma, "x", "lemma"),
+        (crate::TokenAttribute::Pos, "NOUN", "POS"),
+        (crate::TokenAttribute::Tag, "x", "tag"),
+        (crate::TokenAttribute::Dep, "x", "dependency label"),
+        (
+            crate::TokenAttribute::Morphology,
+            "Number=Sing",
+            "morphology",
+        ),
+    ] {
+        let is_morph = attribute == crate::TokenAttribute::Morphology;
+        let unannotated = doc("ab");
+        let missing = |result: Result<Vec<usize>>| matches!(result, Err(Error::MissingAnnotation(found)) if found == name);
+        let repetitions = [
+            Repetition::Once,
+            Repetition::Optional,
+            Repetition::Negated,
+            Repetition::OneOrMore,
+            Repetition::ZeroOrMore,
+        ];
+        for repetition in repetitions {
+            for expected in [value, ""] {
+                let equals = Equals {
+                    value: expected.into(),
+                };
+                let matcher = one_token(attribute, equals, repetition);
+                let label = format!("{attribute:?} {repetition:?} {expected:?}");
+                assert!(missing(starts(&matcher, &unannotated)), "{label}");
+            }
+        }
+        let cases: [(crate::Predicate, &[usize]); 6] = [
+            // A one-value superset compiles like equality but never requires the annotation.
+            (
+                IsSuperset {
+                    values: values(&[value]),
+                },
+                &[],
+            ),
+            (
+                In {
+                    values: values(&[value]),
+                },
+                &[],
+            ),
+            (
+                NotIn {
+                    values: values(&[value]),
+                },
+                &[0, 1],
+            ),
+            (
+                IsSubset {
+                    values: values(&[value]),
+                },
+                if is_morph { &[0, 1] } else { &[] },
+            ),
+            (IsSuperset { values: Vec::new() }, &[0, 1]),
+            (
+                Intersects {
+                    values: values(&[value]),
+                },
+                &[],
+            ),
+        ];
+        for (predicate, expected) in cases {
+            let label = format!("{attribute:?} {predicate:?}");
+            let matcher = one_token(attribute, predicate, Repetition::Once);
+            assert_eq!(starts(&matcher, &unannotated).unwrap(), expected, "{label}");
+        }
+        // A zero-count item is discarded, so it requires no annotation; the following
+        // unconstrained item keeps the pattern nonempty, so validation still runs.
+        let mut matcher = TokenMatcher::new();
+        let zero = TokenPatternItem {
+            constraints: vec![TokenConstraint {
+                attribute,
+                predicate: Equals {
+                    value: value.into(),
+                },
+            }],
+            repetition: Repetition::Range {
+                min: 0,
+                max: Some(0),
+            },
+        };
+        let any = TokenPatternItem {
+            constraints: Vec::new(),
+            repetition: Repetition::Once,
+        };
+        let tokens = vec![zero, any];
+        matcher.add("r", vec![TokenPattern { tokens }]).unwrap();
+        assert_eq!(starts(&matcher, &unannotated).unwrap(), [0, 1]);
+
+        let mut empty = doc("ab");
+        for token in &mut empty.tokens {
+            set_annotation(token, attribute, Some(""));
+        }
+        let matcher = one_token(attribute, Equals { value: "_".into() }, Repetition::Once);
+        if is_morph {
+            assert_eq!(starts(&matcher, &empty).unwrap(), [0, 1]);
+        } else {
+            assert!(missing(starts(&matcher, &empty)));
+        }
+    }
+    // An empty document needs no annotation, as spaCy's `has_annotation` is true for it.
+    let matcher = one_token(
+        crate::TokenAttribute::Lemma,
+        Equals { value: "x".into() },
+        Repetition::Once,
+    );
+    assert!(starts(&matcher, &doc("")).unwrap().is_empty());
+}
+// The annotation check must not be skipped because a membership condition on the same
+// attribute came first; spaCy 3.8.14 raises E155 for this pattern on an unannotated document.
+#[test]
+fn equality_after_membership_on_the_same_attribute_still_requires_annotation() {
+    let lemma = |predicate| TokenConstraint {
+        attribute: crate::TokenAttribute::Lemma,
+        predicate,
+    };
+    let mut matcher = TokenMatcher::new();
+    let item = |predicate| TokenPatternItem {
+        constraints: vec![lemma(predicate)],
+        repetition: Repetition::Once,
+    };
+    matcher
+        .add(
+            "r",
+            vec![TokenPattern {
+                tokens: vec![
+                    item(crate::Predicate::NotIn {
+                        values: values(&["y"]),
+                    }),
+                    item(crate::Predicate::Equals { value: "x".into() }),
+                ],
+            }],
+        )
+        .unwrap();
+    assert!(matches!(
+        starts(&matcher, &doc("ab")),
+        Err(Error::MissingAnnotation("lemma"))
+    ));
+}
+
+// spaCy 3.8.14 still raises E155 here, because its matcher remembers the attributes of removed
+// rules. SpaRs checks the current rules only, an accepted difference in
+// docs/SPACY_DIFFERENCES.md.
+#[test]
+fn removed_rules_do_not_require_annotations() {
+    let mut matcher = one_token(
+        crate::TokenAttribute::Lemma,
+        crate::Predicate::Equals { value: "x".into() },
+        Repetition::Once,
+    );
+    matcher
+        .add("text", vec![pattern(&[Repetition::Once])])
+        .unwrap();
+    assert!(starts(&matcher, &doc("ab")).is_err());
+    matcher.remove("r").unwrap();
+    assert_eq!(starts(&matcher, &doc("ab")).unwrap(), [0, 1]);
+}
+
+// spaCy 3.8.14 checks the attributes in a fixed order, tag, POS, morphology, lemma and
+// dependency label, and names the first one missing, whatever the pattern order.
+#[test]
+fn missing_annotations_are_reported_in_spacy_order() {
+    use crate::TokenAttribute::*;
+    let item = |attribute| TokenPatternItem {
+        constraints: vec![TokenConstraint {
+            attribute,
+            predicate: crate::Predicate::Equals { value: "x".into() },
+        }],
+        repetition: Repetition::Once,
+    };
+    let mut matcher = TokenMatcher::new();
+    let tokens = [Dep, Lemma, Morphology, Pos, Tag].map(item).to_vec();
+    matcher.add("r", vec![TokenPattern { tokens }]).unwrap();
+    let mut document = doc("ab");
+    for (attribute, name) in [
+        (Tag, "tag"),
+        (Pos, "POS"),
+        (Morphology, "morphology"),
+        (Lemma, "lemma"),
+        (Dep, "dependency label"),
+    ] {
+        assert!(matches!(
+            starts(&matcher, &document),
+            Err(Error::MissingAnnotation(found)) if found == name
+        ));
+        let value = match attribute {
+            Pos => "NOUN",
+            Morphology => "Number=Sing",
+            _ => "x",
+        };
+        set_annotation(&mut document.tokens[0], attribute, Some(value));
+    }
+    assert!(starts(&matcher, &document).is_ok());
+}
+
+#[test]
+fn batch_removal_keeps_indexed_starts_consistent() {
+    let item = |attribute, value: &str, repetition| TokenPatternItem {
+        constraints: vec![TokenConstraint {
+            attribute,
+            predicate: crate::Predicate::Equals {
+                value: value.into(),
+            },
+        }],
+        repetition,
+    };
+    use crate::TokenAttribute::{Lower, Norm, Text};
+    // Indexed and unindexed first items, several patterns per rule, removed rules interleaved
+    // with kept ones.
+    let rules: Vec<(String, Vec<TokenPattern>)> = (0..12)
+        .map(|i| {
+            let attribute = [Text, Lower, Norm][i % 3];
+            let repetition = [Repetition::Once, Repetition::Optional][i % 2];
+            let patterns = (0..1 + i % 3)
+                .map(|j| TokenPattern {
+                    tokens: vec![item(attribute, ["x", "y"][(i + j) % 2], repetition)],
+                })
+                .collect();
+            (format!("r{i}"), patterns)
+        })
+        .collect();
+    let mut matcher = TokenMatcher::new();
+    for (name, patterns) in &rules {
+        matcher.add(name.clone(), patterns.clone()).unwrap();
+    }
+    let removed: HashSet<&str> = ["r1", "r4", "r5", "r10", "unknown"].into();
+    matcher.remove_all(&removed);
+    let mut fresh = TokenMatcher::new();
+    for (name, patterns) in rules
+        .iter()
+        .filter(|(name, _)| !removed.contains(name.as_str()))
+    {
+        fresh.add(name.clone(), patterns.clone()).unwrap();
+    }
+    assert_eq!(matcher.len(), fresh.len());
+    assert!(!matcher.contains("r4") && matcher.contains("r2"));
+    for text in ["x", "xy", "yxy", "xxyy"] {
+        let found = spans(&matcher, text);
+        assert_eq!(found, spans(&fresh, text), "{text}");
+        assert_eq!(
+            outcome(matcher.find_matches_unindexed(&doc(text))),
+            Ok(found),
+            "{text}"
+        );
+    }
+    // Rules added after a batch removal are indexed at the end.
+    matcher.add("late", rules[0].1.clone()).unwrap();
+    fresh.add("late", rules[0].1.clone()).unwrap();
+    assert_eq!(spans(&matcher, "xy"), spans(&fresh, "xy"));
 }

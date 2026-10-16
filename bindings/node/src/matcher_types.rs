@@ -6,12 +6,13 @@ use napi_derive::napi;
 #[napi(object)]
 pub struct TokenPredicate {
     pub kind: Utf16String,
-    /// `==`, `!=`, `>=`, `<=`, `>` or `<` for `compare`.
+    // scripts/declarations.mts replaces this interface with the precise TokenConstraint union.
+    // `==`, `!=`, `>=`, `<=`, `>` or `<` for `compare`.
     pub operator: Option<Utf16String>,
-    /// A string for `equals`; a boolean for `flag`; a finite number for `compare`.
+    // A string for `equals`; a boolean for `flag`; a finite number for `compare`.
     pub value: Option<Either3<Utf16String, bool, f64>>,
-    /// Strings for `in`, `not_in`, `is_subset`, `is_superset`, `intersects` and the
-    /// morphology predicates; safe integers for the `*_integers` predicates.
+    // Strings for `in`, `not_in`, `is_subset`, `is_superset`, `intersects` and the
+    // morphology predicates; safe integers for the `*_integers` predicates.
     pub values: Option<Either<Vec<Utf16String>, Vec<f64>>>,
 }
 

@@ -77,13 +77,13 @@ class Fixture:
     cases: list[Case]
 
 
-def verify_source() -> tuple[dict[str, str], dict[str, str]]:
+def verify_source(sources: list[str] = SOURCES) -> tuple[dict[str, str], dict[str, str]]:
     lock = json_object(json_object(read_json(ROOT / 'reference/source-lock.json'))['spacy'])
     if spacy.__version__ != json_string(lock['version']) or spacy.__version__ != '3.8.14':
         raise ValueError('Expected spaCy 3.8.14')
     files = json_object(lock['files'])
     hashes: dict[str, str] = {}
-    for source in SOURCES:
+    for source in sources:
         actual = hashlib.sha256(Path(str(importlib.metadata.distribution('spacy').locate_file(source))).read_bytes()).hexdigest()
         if actual != json_string(files[source]):
             raise ValueError(f'Source mismatch: {source}')

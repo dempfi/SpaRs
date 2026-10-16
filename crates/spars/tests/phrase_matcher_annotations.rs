@@ -62,22 +62,19 @@ fn doc(tokens: &[AnnotatedToken]) -> Doc {
         let start = text.len();
         let idx = text.chars().count();
         text.push_str(&token.word);
-        stored.push(Token {
-            start: spars::ByteOffset(start),
-            end: spars::ByteOffset(text.len()),
-            idx: spars::CodePointOffset(idx),
-            whitespace: token.space,
-            norm: token.norm.clone(),
-            tag: token.tag.clone(),
-            pos: token.pos.clone(),
-            morphology: token.morph.clone(),
-            lemma: token.lemma.clone(),
-            head: None,
-            dep: token.dep.clone(),
-            sentence_start: None,
-            entity_iob: None,
-            entity_type: None,
-        });
+        let mut stored_token = Token::new(
+            spars::ByteOffset(start),
+            spars::ByteOffset(text.len()),
+            spars::CodePointOffset(idx),
+            token.norm.clone(),
+        );
+        stored_token.whitespace = token.space;
+        stored_token.tag = token.tag.clone();
+        stored_token.pos = token.pos.clone();
+        stored_token.morphology = token.morph.clone();
+        stored_token.lemma = token.lemma.clone();
+        stored_token.dep = token.dep.clone();
+        stored.push(stored_token);
         if token.space {
             text.push(' ');
         }

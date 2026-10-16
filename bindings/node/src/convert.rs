@@ -1,5 +1,5 @@
 use crate::errors::{number, Result};
-use crate::output::{Document, Span, Token};
+use crate::output::{Document, Span, SpanGroup, Token};
 
 pub fn document(doc: &spars::Doc) -> Result<Document> {
     // Walk text once in order. Counting each token's prefix would be quadratic.
@@ -37,6 +37,7 @@ pub fn document(doc: &spars::Doc) -> Result<Document> {
             sentence_start: token.sentence_start,
             entity_iob: token.entity_iob.clone(),
             entity_type: token.entity_type.clone(),
+            entity_id: token.entity_id.clone().unwrap_or_default(),
         });
         utf16_cursor += units;
         byte_cursor = token.end.0;
@@ -47,6 +48,21 @@ pub fn document(doc: &spars::Doc) -> Result<Document> {
         entities: spans(doc.entities())?,
         sentences: spans(doc.sentences())?,
         noun_chunks: spans(doc.noun_chunks())?,
+        // Attrs are JSON text, which the package wrapper of `NativeDocument.toObject` parses.
+        // Inference output never has groups, since no pipeline stage adds them; a stage that did
+        // would need the same parsing on `Model.process` output.
+        span_groups: doc
+            .span_groups()
+            .iter()
+            .map(|(key, group)| {
+                Ok(SpanGroup {
+                    key: key.to_owned(),
+                    name: group.name.clone(),
+                    attrs: serde_json::to_string(&group.attrs).map_err(spars::Error::from)?,
+                    spans: spans(Some(&group.spans))?.unwrap_or_default(),
+                })
+            })
+            .collect::<Result<_>>()?,
     })
 }
 
@@ -60,6 +76,7 @@ fn spans(spans: Option<&[spars::Span]>) -> Result<Option<Vec<Span>>> {
                         start: number(span.start.0)?,
                         end: number(span.end.0)?,
                         label: span.label.clone(),
+                        id: span.id.clone().unwrap_or_default(),
                     })
                 })
                 .collect()

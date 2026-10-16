@@ -6,13 +6,21 @@ use napi::{
 };
 use napi_derive::napi;
 use std::path::PathBuf;
+/// Where and what `downloadModel` installs.
 #[napi(object)]
 pub struct DownloadOptions {
+    /// Model store directory, relative to the current directory; defaults to `SPARS_MODEL_DIR` or
+    /// the user cache. Must not be empty.
     pub path: Option<Utf16String>,
+    /// A local copy of the official wheel to install instead of downloading; its checksum is
+    /// verified.
     pub archive: Option<Utf16String>,
+    /// Release version such as `3.8.0`; defaults to the pinned release.
     pub version: Option<Utf16String>,
 }
-/// Download an official model explicitly and remember its installation for loadModel(name).
+/// Download, verify and install an official model, then register it so `loadModel(name)` finds it
+/// in the same store. An existing verified installation is reused. Resolves to the installation
+/// directory.
 #[napi(
     strict,
     ts_args_type = "name: OfficialModelName, options?: DownloadOptions | undefined | null",
@@ -58,8 +66,11 @@ fn prepare_download(
     });
     Ok((name, options))
 }
+/// Where `loadModel` looks up a model name.
 #[napi(object)]
 pub struct LoadOptions {
+    /// Model store directory, relative to the current directory; replaces `SPARS_MODEL_DIR` and the
+    /// user cache. Must not be empty.
     pub path: Option<Utf16String>,
 }
 

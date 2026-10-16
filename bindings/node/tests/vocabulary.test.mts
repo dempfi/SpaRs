@@ -17,8 +17,14 @@ test('snapshots accept exactly the declared POS and IOB values', () => {
   for (const pos of [...UNIVERSAL_POS, '']) {
     assert.equal(NativeDocument.fromSnapshot(snapshot({ pos })).toObject().tokens[0]?.pos, pos);
   }
-  for (const iob of [...ENTITY_IOB, '']) {
-    assert.equal(NativeDocument.fromSnapshot(snapshot({ entity_iob: iob })).toObject().tokens[0]?.entityIob, iob);
+  // Each value follows an `X` entity, so an `I` has an entity to continue; the stored list is the one the tags describe.
+  const entities = { B: [[0, 1], [1, 2]], I: [[0, 2]], O: [[0, 1]], '': [[0, 1]] } as const;
+  for (const iob of [...ENTITY_IOB, ''] as const) {
+    const tokens = [{ start: 0, end: 1, idx: 0, whitespace: true, norm: 'a', entity_iob: 'B', entity_type: 'X' },
+      { start: 2, end: 3, idx: 2, whitespace: false, norm: 'b', entity_iob: iob, entity_type: 'X' }];
+    const tagged = JSON.stringify({ format_version: 1, document: { text: 'a b', tokens,
+      entities: entities[iob].map(([start, end]) => ({ start, end, label: 'X' })) } });
+    assert.equal(NativeDocument.fromSnapshot(tagged).toObject().tokens[1]?.entityIob, iob);
   }
   for (const pos of ['noun', 'Noun', 'FOO']) {
     assert.throws(() => NativeDocument.fromSnapshot(snapshot({ pos })), { code: 'SPARS_INVALID_MODEL' });

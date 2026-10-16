@@ -9,7 +9,7 @@ pub use predicates::{Comparison, FiniteNumber, Predicate, TokenAttribute, TokenC
 use relations::Graph;
 pub use relations::Relation;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// An ordered dependency pattern. Every link refers to an earlier node ID.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -122,27 +122,25 @@ impl DependencyMatcher {
         self.rules.remove(index);
         Ok(())
     }
-    /// Find matches in official rule, pattern, root-bucket, and candidate order.
-    /// Nonempty matchers require valid dependency heads. Position relations use
-    /// dependency-root bounds, independently of stored sentence annotations.
+    /// Find matches in the pinned spaCy `DependencyMatcher` order: by rule, then pattern, then
+    /// dependency tree and candidate. A matcher without rules returns no matches and needs no
+    /// parse; otherwise a missing, out-of-range or cyclic head returns [`Error::Dependency`].
+    /// Position relations use the bounds of each dependency tree, not stored sentence
+    /// boundaries. Token conditions fail as in [`crate::TokenMatcher::find_matches`]:
+    /// [`Error::MissingAnnotation`] for an `Equals` on an annotation no token has, and
+    /// [`Error::Unsupported`] for noncanonical document morphology.
     pub fn find_matches(&self, doc: &Doc) -> Result<Vec<DependencyMatch>> {
         if self.is_empty() {
             return Ok(Vec::new());
         }
         let mut graph = Graph::new(doc)?;
         let patterns: Vec<_> = self.rules.iter().flat_map(|r| &r.compiled).collect();
-        let mut checked_attributes = HashSet::new();
-        for pattern in &patterns {
-            for node in &pattern.nodes {
-                for constraint in &node.constraints {
-                    if checked_attributes.insert(constraint.attribute()) {
-                        constraint.validate_document(doc)?;
-                    }
-                }
-            }
-        }
+        let constraints = patterns
+            .iter()
+            .flat_map(|pattern| &pattern.nodes)
+            .flat_map(|node| &node.constraints);
         let mut needs = Needs {
-            lower: checked_attributes.contains(&TokenAttribute::Lower),
+            lower: predicates::validate_constraints(constraints, doc)?,
             ..Needs::default()
         };
         for node in patterns.iter().flat_map(|pattern| &pattern.nodes) {

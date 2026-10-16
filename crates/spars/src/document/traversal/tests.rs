@@ -8,7 +8,12 @@ fn document(heads: &[Option<usize>]) -> Doc {
             .iter()
             .enumerate()
             .map(|(i, head)| {
-                let mut token = Token::new(i, i + 1, i, "x".into());
+                let mut token = Token::new(
+                    crate::ByteOffset(i),
+                    crate::ByteOffset(i + 1),
+                    crate::CodePointOffset(i),
+                    "x".into(),
+                );
                 token.head = head.map(TokenIndex);
                 token
             })
@@ -17,6 +22,7 @@ fn document(heads: &[Option<usize>]) -> Doc {
         sentences: None,
         noun_chunks: None,
         tensor: Vec::new(),
+        span_groups: Default::default(),
         dependency_index: Default::default(),
     }
 }
@@ -101,11 +107,13 @@ fn sentence_access_distinguishes_missing_empty_and_gapped_annotations() {
             start: TokenIndex(0),
             end: TokenIndex(1),
             label: String::new(),
+            id: None,
         },
         Span {
             start: TokenIndex(2),
             end: TokenIndex(3),
             label: String::new(),
+            id: None,
         },
     ]);
     assert_eq!(doc.sentence_views().unwrap().len(), 2);

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DependencyMatcher, loadModel, NativeDocument } from '../index.js';
 import type { DependencyPattern, DependencyNode } from '../index.js';
-import { array, modelPath, readJson, record, root } from './fixtures.mts';
+import { array, entitiesFromTags, modelPath, readJson, record, referenceTokens, root } from './fixtures.mts';
 import { recordedConstraint, relation } from './vocabulary.mts';
 import type { Recorded } from './vocabulary.mts';
 
@@ -40,7 +40,7 @@ function addRecorded(matcher: DependencyMatcher, rule: string, patterns: Recorde
 function document(value: unknown): NativeDocument {
   const c = record(value);
   return NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: {
-    text: c.text, tokens: c.tokens, sentences: c.sentences, entities: c.entities, noun_chunks: c.noun_chunks,
+    text: c.text, tokens: c.tokens, sentences: c.sentences, entities: entitiesFromTags(referenceTokens(c.tokens)), noun_chunks: c.noun_chunks,
   } }));
 }
 const singleton: DependencyPattern = { nodes: [{ id: 'a', constraints: [] }] };
@@ -267,5 +267,9 @@ test('missing dependency heads and unavailable constrained annotations reject as
   await assert.rejects(matcher.findMatches(doc));
   matcher.remove('rule');
   matcher.add('lemma', [{ nodes: [{ id: 'a', constraints: [{ attribute: 'lemma', predicate: { kind: 'equals', value: 'a' } }] }] }]);
-  await assert.rejects(matcher.findMatches(tiny()));
+  await assert.rejects(matcher.findMatches(tiny()), (error: unknown) => error instanceof Error && 'code' in error && error.code === 'SPARS_INFERENCE' && /lemma/.test(error.message));
+  // Membership conditions need no annotated token, as in spaCy 3.8.14.
+  matcher.remove('lemma');
+  matcher.add('other', [{ nodes: [{ id: 'a', constraints: [{ attribute: 'lemma', predicate: { kind: 'not_in', values: ['a'] } }] }] }]);
+  assert.equal((await matcher.findMatches(tiny())).length, 2);
 });

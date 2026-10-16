@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { loadModel, NativeDocument, TokenMatcher } from '../index.js';
-import { modelPath } from './fixtures.mts';
+import { entitiesFromTags, modelPath, referenceTokens } from './fixtures.mts';
 import type { TokenPattern, TokenConstraint, TokenRepetition } from '../index.js';
 import { recordedConstraint, repetition } from './vocabulary.mts';
 import type { Recorded } from './vocabulary.mts';
@@ -77,7 +77,7 @@ for (const [filename, cases, rules, matches, untyped] of [
     let matchCount = 0;
     for (const item of items) {
       const matcher = new TokenMatcher();
-      const doc = NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: item }));
+      const doc = NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: { ...item, entities: entitiesFromTags(referenceTokens(item.tokens)) } }));
       for (const raw of array(item.rules)) {
         const rule = record(raw);
         outOfVocabulary += addRecorded(matcher, string(rule.name), array(rule.patterns).map(pattern));
@@ -111,7 +111,7 @@ test('TokenMatcher lexical flags match the frozen official suite with a model le
   let matchCount = 0;
   for (const item of items) {
     const matcher = new TokenMatcher(model);
-    const doc = NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: item }));
+    const doc = NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: { ...item, entities: entitiesFromTags(referenceTokens(item.tokens)) } }));
     for (const raw of array(item.rules)) {
       const rule = record(raw);
       outOfVocabulary += addRecorded(matcher, string(rule.name), array(rule.patterns).map(pattern));
@@ -157,7 +157,7 @@ test('TokenMatcher remaining lexical flags match the frozen official suite', asy
   let matchCount = 0;
   for (const item of items) {
     const matcher = new TokenMatcher(model);
-    const doc = NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: item }));
+    const doc = NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: { ...item, entities: entitiesFromTags(referenceTokens(item.tokens)) } }));
     for (const raw of array(item.rules)) {
       const rule = record(raw);
       outOfVocabulary += addRecorded(matcher, string(rule.name), array(rule.patterns).map(pattern));
@@ -319,5 +319,28 @@ test('TokenMatcher rejects malformed patterns atomically and reports unavailable
   }
   assert.throws(() => matcher.add('bad', [{ tokens: [{ constraints: [{ attribute: 'text', predicate: { kind: 'equals', value: '\ud800' } }], repetition: { kind: 'once' } }] }]), hasCode('SPARS_INVALID_TEXT'));
   matcher.add('lemma', [{ tokens: [{ constraints: [{ attribute: 'lemma', predicate: { kind: 'equals', value: 'x' } }], repetition: { kind: 'once' } }] }]);
-  await assert.rejects(matcher.findMatches(plainDoc('x')), /lemma/i);
+  await assert.rejects(matcher.findMatches(plainDoc('x')), (error: unknown) => hasCode('SPARS_INFERENCE')(error) && error instanceof Error && /lemma/i.test(error.message));
+});
+test('partly annotated snapshots compare missing values like spaCy', async () => {
+  // Expected spans are spaCy 3.8.14 Matcher results: E155 only when no token has an annotation
+  // an equality condition compares; a missing lemma compares as '', and missing morphology
+  // (null) differs from the empty analysis ('').
+  const doc = NativeDocument.fromSnapshot(JSON.stringify({ format_version: 1, document: { text: 'abc', tokens: [
+    { start: 0, end: 1, idx: 0, norm: 'a', whitespace: false, lemma: 'x', morphology: 'Number=Plur' },
+    { start: 1, end: 2, idx: 1, norm: 'b', whitespace: false, morphology: '' },
+    { start: 2, end: 3, idx: 2, norm: 'c', whitespace: false },
+  ] } }));
+  const spans = async (constraint: TokenConstraint): Promise<Array<[number, number]>> => {
+    const matcher = new TokenMatcher();
+    matcher.add('r', [{ tokens: [{ constraints: [constraint], repetition: { kind: 'once' } }] }]);
+    return (await matcher.findMatches(doc)).map(m => [m.start, m.end]);
+  };
+  assert.deepEqual(await spans({ attribute: 'lemma', predicate: { kind: 'equals', value: 'x' } }), [[0, 1]]);
+  assert.deepEqual(await spans({ attribute: 'lemma', predicate: { kind: 'not_in', values: ['x'] } }), [[1, 2], [2, 3]]);
+  assert.deepEqual(await spans({ attribute: 'morphology', predicate: { kind: 'equals', value: '_' } }), [[1, 2]]);
+  assert.deepEqual(await spans({ attribute: 'morphology', predicate: { kind: 'equals', value: '' } }), [[2, 3]]);
+  assert.deepEqual(await spans({ attribute: 'morphology', predicate: { kind: 'in', values: [''] } }), [[1, 2]]);
+  // Membership needs no annotated token; equality does.
+  assert.deepEqual(await spans({ attribute: 'pos', predicate: { kind: 'not_in', values: ['NOUN'] } }), [[0, 1], [1, 2], [2, 3]]);
+  await assert.rejects(spans({ attribute: 'pos', predicate: { kind: 'equals', value: 'NOUN' } }), hasCode('SPARS_INFERENCE'));
 });

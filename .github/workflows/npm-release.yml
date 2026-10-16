@@ -1,6 +1,25 @@
 name: npm release
 on:
+  # Rebuild the npm packages on pull requests only when their inputs change. This workflow is not
+  # a required check, so skipping it does not block merging.
   pull_request:
+    paths:
+      - bindings/node/**
+      - crates/**
+      - tools/release/**
+      - models/**
+      - fixtures/**
+      - licenses/**
+      - Cargo.toml
+      - Cargo.lock
+      - .cargo/**
+      - .nvmrc
+      - LICENSE
+      - THIRD_PARTY_NOTICES.md
+      - version.txt
+      - .release-please-manifest.json
+      - .github/workflows/npm-release.yml
+      - .github/scripts/npm-release.cjs
   workflow_dispatch:
     inputs:
       tag:
@@ -82,7 +101,7 @@ jobs:
         with:
           ref: ${{ needs.validate.outputs.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           package-manager-cache: false
@@ -114,7 +133,7 @@ jobs:
         run: |
           docker build -t spars-release-alpine - < bindings/node/scripts/release-alpine.Dockerfile
           docker run --rm -e RELEASE_SHA -e RELEASE_TARGET -v "$PWD:/work" -w /work spars-release-alpine sh bindings/node/scripts/release-alpine.sh build
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.target }}
           path: target/npm-input/${{ matrix.target }}/
@@ -130,11 +149,11 @@ jobs:
         with:
           ref: ${{ needs.validate.outputs.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           package-manager-cache: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: target/npm-input
       - name: Assemble complete release and pack without lifecycle scripts
@@ -142,7 +161,7 @@ jobs:
           RELEASE_SHA: ${{ needs.validate.outputs.sha }}
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: node bindings/node/scripts/release.mts stage target/npm-input target/npm-release "$RELEASE_SHA" "$RELEASE_VERSION"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-tarballs
           path: target/npm-release/tarballs/
@@ -183,13 +202,13 @@ jobs:
         with:
           ref: ${{ needs.validate.outputs.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           package-manager-cache: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         if: ${{ !matrix.alpine }}
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: npm-tarballs
           path: target/npm-tarballs
@@ -220,11 +239,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           package-manager-cache: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: npm-tarballs
           path: tarballs
@@ -234,7 +253,7 @@ jobs:
           RELEASE_SHA: ${{ needs.validate.outputs.sha }}
         run: |
           node bindings/node/scripts/release-assets.mts seal "$RELEASE_TAG" tarballs "$RELEASE_SHA"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-release-set
           overwrite: true
@@ -261,12 +280,12 @@ jobs:
         with:
           ref: ${{ needs.validate.outputs.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: npm-tarballs
           path: tarballs

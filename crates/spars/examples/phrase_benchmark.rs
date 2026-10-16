@@ -24,22 +24,14 @@ fn doc(words: &[String]) -> Doc {
         let idx = cp;
         cp += word.chars().count() + 1;
         text.push_str(word);
-        tokens.push(Token {
-            start: ByteOffset(start),
-            end: ByteOffset(text.len()),
-            idx: CodePointOffset(idx),
-            whitespace: true,
-            norm: word.clone(),
-            tag: None,
-            pos: None,
-            morphology: None,
-            lemma: None,
-            head: None,
-            dep: None,
-            sentence_start: None,
-            entity_iob: None,
-            entity_type: None,
-        });
+        let mut token = Token::new(
+            ByteOffset(start),
+            ByteOffset(text.len()),
+            CodePointOffset(idx),
+            word.clone(),
+        );
+        token.whitespace = true;
+        tokens.push(token);
         text.push(' ');
     }
     Doc::from_json(

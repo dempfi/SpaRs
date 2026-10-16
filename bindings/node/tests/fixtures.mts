@@ -45,6 +45,28 @@ function spans(value: unknown): ReferenceSpan[] | null {
     return { start: number(s.start), end: number(s.end), label: string(s.label) };
   }));
 }
+/** Recorded tokens, checked field by field. */
+export function referenceTokens(value: unknown): ReferenceToken[] { return array(value).map(token); }
+/**
+ * The entities spaCy's `doc.ents` reads from recorded tags: a `B` tag with a type starts an entity and `I` tags continue it.
+ * The token and dependency matcher generators record the pipeline's tags but write `[]` in place of the entity list, which
+ * `fromSnapshot` rejects when the tags describe entities.
+ */
+export function entitiesFromTags(tokens: ReferenceToken[]): ReferenceSpan[] {
+  const spans: ReferenceSpan[] = [];
+  let open: number | null = null;
+  const close = (end: number): void => {
+    if (open !== null) spans.push({ start: open, end, label: tokens[open]?.entity_type ?? '' });
+    open = null;
+  };
+  tokens.forEach((t, i) => {
+    if (t.entity_iob === 'I') return;
+    close(i);
+    if (t.entity_iob === 'B' && t.entity_type) open = i;
+  });
+  close(tokens.length);
+  return spans;
+}
 export function readJson(path: string): unknown { return JSON.parse(readFileSync(path, 'utf8')); }
 export function corpus(name: string): ReferenceDocument[] {
   const fixture = record(readJson(`${root}fixtures/${name}.expected.json`));
@@ -56,9 +78,16 @@ export function corpus(name: string): ReferenceDocument[] {
     return { text: string(c.text), tokens: array(c.tokens).map(token), entities: spans(c.entities), sentences: spans(c.sentences), noun_chunks: spans(c.noun_chunks) };
   });
 }
+/** Spans without their IDs, after checking there are none: the official suites predate entity IDs, and pipeline output never has them. */
+function withoutIds(spans: Document['entities']): ReferenceSpan[] | null {
+  return spans && spans.map(({ id, ...span }) => { assert.equal(id, ''); return span; });
+}
 export function snapshot(doc: Document): ReferenceDocument {
+  assert.ok(doc.tokens.every(t => t.entityId === ''));
+  // No pipeline stage writes span groups, as spaCy's official pipelines leave doc.spans empty.
+  assert.deepEqual(doc.spanGroups, []);
   return { text: doc.text, tokens: doc.tokens.map(t => ({ start: t.byteStart, end: t.byteEnd, idx: t.codePointStart,
     whitespace: t.whitespace === ' ', norm: t.norm, tag: t.tag, pos: t.pos, morphology: t.morphology,
     lemma: t.lemma, head: t.head, dep: t.dep, sentence_start: t.sentenceStart, entity_iob: t.entityIob, entity_type: t.entityType })),
-    entities: doc.entities, sentences: doc.sentences, noun_chunks: doc.nounChunks };
+    entities: withoutIds(doc.entities), sentences: withoutIds(doc.sentences), noun_chunks: withoutIds(doc.nounChunks) };
 }

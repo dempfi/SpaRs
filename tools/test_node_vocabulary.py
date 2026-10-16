@@ -4,6 +4,9 @@ import re
 import unittest
 
 from spacy.parts_of_speech import IDS
+from spacy.pipeline.span_ruler import DEFAULT_SPANS_KEY as SPAN_RULER_KEY
+from spacy.pipeline.spancat import DEFAULT_SPANS_KEY as SPANCAT_KEY
+from spacy.pipeline.span_finder import DEFAULT_SPANS_KEY as SPAN_FINDER_KEY
 
 from json_types import json_array, json_object, json_string, read_json
 
@@ -67,6 +70,10 @@ class NodeVocabularyTests(unittest.TestCase):
         self.assertEqual(set(registry('EntityLabels')), model_labels('ner'))
         self.assertEqual(set(registry('FineGrainedTags')), model_labels('tagger'))
         self.assertEqual(set(registry('DependencyLabels')), model_labels('parser'))
+
+    def test_span_group_keys_are_spacy_component_defaults(self) -> None:
+        self.assertEqual(SPAN_FINDER_KEY, SPANCAT_KEY)
+        self.assertEqual(sorted(registry('SpanGroupKeys')), sorted({SPAN_RULER_KEY, SPANCAT_KEY}))
 
     def test_model_names_match_the_catalog(self) -> None:
         catalog = sorted({json_string(json_object(entry)['model']) for entry in json_array(read_json(ROOT / 'models/catalog.json'))})

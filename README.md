@@ -1,5 +1,7 @@
 # SpaRs
 
+[![crates.io](https://img.shields.io/crates/v/spars-nlp.svg)](https://crates.io/crates/spars-nlp) [![docs.rs](https://img.shields.io/docsrs/spars-nlp)](https://docs.rs/spars-nlp) [![npm](https://img.shields.io/npm/v/@spars/node.svg)](https://www.npmjs.com/package/@spars/node) [![CI](https://github.com/tareksanger/SpaRs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tareksanger/SpaRs/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/tareksanger/SpaRs/blob/main/LICENSE) [![MSRV 1.85](https://img.shields.io/badge/MSRV-1.85-orange.svg)](https://github.com/tareksanger/SpaRs/blob/main/crates/spars/Cargo.toml)
+
 > **AI disclosure:** This project is built with AI assistance.
 
 Experimental, standalone Rust NLP library using **official spaCy pretrained weights**, with native Rust tokenization and inference. The Rust crate needs no Python, JavaScript, WASM, subprocess, network client, or build-time model download. Optional [Node.js bindings](https://github.com/tareksanger/SpaRs/blob/main/docs/NODE.md) live in a separate crate. The project is named **SpaRs**, with Cargo package name `spars-nlp` and Rust import name `spars`.
@@ -44,13 +46,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `Model` is immutable, reusable, `Send + Sync`; each call owns its processing state. `pipe` streams documents sequentially with independent per-document computation. `process_until(text, Stage::Tagger)` runs an ordered prefix; missing annotations remain `None`. The API does not silently skip unsupported components.
 
-`Doc` owns exact source text. `ByteOffset`, `CodePointOffset` and `TokenIndex` are distinct, with checked conversion. Whitespace tokens and trailing ASCII spaces are preserved. Checked `TokenView`/`SpanView` borrow documents safely. Native snapshot JSON is versioned and validates boundaries and closed values (entity IOB tags, universal POS tags, non-empty entity labels, empty sentence labels and `NP` noun-chunk labels); it is not spaCy DocBin.
+`Doc` owns exact source text. `ByteOffset`, `CodePointOffset` and `TokenIndex` are distinct, with checked conversion. Whitespace tokens and trailing ASCII spaces are preserved. Checked `TokenView`/`SpanView` borrow documents safely. Native snapshot JSON is versioned and validates boundaries and closed values (entity IOB tags, universal POS tags, non-empty entity labels, empty sentence labels and `NP` noun-chunk labels) and entities that agree with the token IOB tags; it is not spaCy DocBin.
 
 `vector` returns static lexical vectors or `None` for missing keys. For `sm`, `token_vector` uses contextual rows produced by the shared encoder; it returns `None` before encoding. `span_vector` and `document_vector` average all tokens, including OOV zero rows for static models. Empty `sm` documents/spans return zero-length vectors. Contextual rows survive native v2 document snapshots. Similarity returns 1 for identical token sequences (including two empty sequences), otherwise cosine, or 0 when either vector norm is zero, following the pinned reference. No warnings are emitted for OOV similarity. Static vectors are distinct from `tok2vec` output.
 
 `Doc::set_entities` replaces entity annotation like spaCy's `Doc.set_ents`, keeping token IOB tags, entity types and the entity list consistent and rejecting invalid updates without changing the document; `Doc::with_entities` returns an updated copy instead. See [editing entities](docs/ENTITIES.md).
 
-`PhraseMatcher` matches reusable phrase patterns by exact text (`ORTH`/`TEXT`), pinned Unicode lowercase (`LOWER`), token norm (`NORM`), linguistic annotations (`LEMMA`, `POS`, `TAG`, `DEP` and `MORPH`), lexical flags such as `IS_ALPHA`, or `LENGTH`, including ordered overlaps and registration/removal. It accepts existing documents without inference or downloads. See the [PhraseMatcher guide](docs/PHRASE_MATCHER.md). The [Node API](docs/NODE.md) exposes all three native matchers, retained document/token/span views, entity editing, traversal, vectors and similarity, lexical queries, snapshots, and offline model-store management.
+`EntityRuler` adds entities from token patterns and phrases like spaCy's `entity_ruler`, after the recognizer or without it, with spaCy's priority, overwrite and entity-ID behavior and a few [documented differences](docs/ENTITY_RULER.md#differences-from-spacy). See [adding entities with rules](docs/ENTITY_RULER.md); Node exposes it as `EntityRuler`.
+
+Rust documents store named [span groups](docs/SPAN_GROUPS.md) like spaCy's `Doc.spans`: ordered lists of spans that may overlap, with names and JSON attributes, kept in snapshots; Node exposes them through `withSpanGroup`, `withoutSpanGroup` and `toObject().spanGroups`.
+
+`SpanRuler` adds span groups, and optionally entities, from token patterns and phrases like spaCy's `span_ruler`, with spaCy's filters, overwrite behavior and match order. See [adding spans with rules](docs/SPAN_RULER.md); Node provides it as [`SpanRuler`](docs/NODE.md#add-spans-with-rules).
+
+`PhraseMatcher` matches reusable phrase patterns by exact text (`ORTH`/`TEXT`), pinned Unicode lowercase (`LOWER`), token norm (`NORM`), linguistic annotations (`LEMMA`, `POS`, `TAG`, `DEP` and `MORPH`), lexical flags such as `IS_ALPHA`, or `LENGTH`, including ordered overlaps and registration/removal. It accepts existing documents without inference or downloads. See the [PhraseMatcher guide](docs/PHRASE_MATCHER.md). The [Node API](docs/NODE.md) exposes all three native matchers, the EntityRuler and SpanRuler, retained document/token/span views, entity editing, span groups, traversal, vectors and similarity, lexical queries, snapshots, and offline model-store management.
 
 ## Install a model without Python
 

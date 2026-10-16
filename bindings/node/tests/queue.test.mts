@@ -116,7 +116,7 @@ test('wrappers defer native invocation and reject saturation without reading bat
   Object.defineProperty(inaccessible, 0, { get() { throw new Error('must not copy a rejected batch'); } });
   await assert.rejects(model.processBatch(inaccessible), { code: 'SPARS_BUSY' });
   assert.deepEqual(started, ['first']);
-  const doc = (text: string): Document => ({ text, tokens: [], entities: null, sentences: null, nounChunks: null });
+  const doc = (text: string): Document => ({ text, tokens: [], entities: null, sentences: null, nounChunks: null, spanGroups: [] });
   gates.get('first')?.resolve(doc('first'));
   await first;
   assert.deepEqual(started, ['first', 'second']);
@@ -149,7 +149,7 @@ test('native chunks run sequentially under one admission slot and stop on failur
   const chunks: string[][] = [];
   let gates = [deferred(), deferred(), deferred()];
   let active = 0;
-  const doc = (text: string): Document => ({ text, tokens: [], entities: null, sentences: null, nounChunks: null });
+  const doc = (text: string): Document => ({ text, tokens: [], entities: null, sentences: null, nounChunks: null, spanGroups: [] });
   class FakeModel {
     private maximum = 1_000_000;
     private size = 2;

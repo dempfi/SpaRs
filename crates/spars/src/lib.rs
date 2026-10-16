@@ -29,7 +29,11 @@
 mod config;
 mod dependency_matcher;
 mod document;
+mod entity_ruler;
 pub use dependency_matcher::*;
+pub use entity_ruler::*;
+mod span_ruler;
+pub use span_ruler::*;
 mod hash;
 mod lexical;
 pub use lexical::Lexeme;
@@ -66,7 +70,7 @@ pub enum Error {
     Model(String),
     #[error("unsupported configuration: {0}")]
     Unsupported(String),
-    #[error("invalid dependency pattern: {0}")]
+    #[error("invalid pattern: {0}")]
     Pattern(String),
     #[error("invalid span or offset")]
     Bounds,

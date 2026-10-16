@@ -169,7 +169,7 @@ function install(binding) {
     if (typeof text !== 'string') throw new TypeError('Expected a text string');
     validateStage(stage);
     if (inputLimits && text.length > inputLimits.maxTextLength) return tooLarge('Text exceeds maxTextLength (UTF-16 units)');
-    return scheduler.submit(() => process.call(this, text, stage));
+    return scheduler.submit(() => process.call(this, text, stage)).then(parseAttrs);
   };
   const processDocument = prototype.processDocument;
   if (processDocument) prototype.processDocument = function(text, stage) {
@@ -205,7 +205,7 @@ function install(binding) {
       const documents = [];
       for (let offset = 0; offset < snapshot.length; offset += size) {
         const result = await batch.call(this, snapshot.slice(offset, offset + size), stage);
-        for (const doc of result) documents.push(doc);
+        for (const doc of result) documents.push(parseAttrs(doc));
       }
       return documents;
     });
@@ -236,6 +236,41 @@ function install(binding) {
 }
 
 /**
+ * Run document searches through the scheduler and count them per receiver, so rule changes can
+ * be rejected while a search is queued or running.
+ * @template {string} S
+ * @param {Record<S, (doc: import('./index.js').NativeDocument) => Promise<unknown>>} prototype
+ * @param {{ [Symbol.hasInstance](value: unknown): boolean }} Receiver
+ * @param {typeof import('./index.js').NativeDocument} NativeDocument
+ * @param {S[]} searches
+ * @returns {(receiver: object) => void} a check that throws SPARS_BUSY while searches are pending
+ */
+function guardSearches(prototype, Receiver, NativeDocument, searches) {
+  /** @type {WeakMap<object, number>} */
+  const pending = new WeakMap();
+  for (const name of searches) {
+    const search = prototype[name];
+    if (typeof search !== 'function') throw new TypeError(`Expected a native ${name} method`);
+    /** @this {object} @param {import('./index.js').NativeDocument} doc */
+    prototype[name] = function(doc) {
+      if (!(this instanceof Receiver)) throw new TypeError('Expected a matcher receiver');
+      if (!(doc instanceof NativeDocument)) throw new TypeError('Expected a NativeDocument');
+      if (inputLimits && doc.utf16Length > inputLimits.maxTextLength) return tooLarge('Document exceeds maxTextLength (UTF-16 units)');
+      if (scheduler.full()) return busy();
+      pending.set(this, (pending.get(this) ?? 0) + 1);
+      return scheduler.submit(() => search.call(this, doc)).finally(() => {
+        const count = (pending.get(this) ?? 1) - 1;
+        if (count) pending.set(this, count);
+        else pending.delete(this);
+      });
+    };
+  }
+  return receiver => {
+    if (pending.has(receiver)) throw Object.assign(new Error('Matcher rules cannot change while matching is pending'), { code: 'SPARS_BUSY' });
+  };
+}
+
+/**
  * Keep rule mutation excluded from queued as well as actively executing searches.
  * @template T
  * @template {unknown[]} A
@@ -247,33 +282,163 @@ function installMatcher(Matcher, NativeDocument, kind) {
   const prototype = Matcher.prototype;
   if (installed.has(prototype)) return;
   installed.add(prototype);
-  const find = prototype.findMatches;
   const add = prototype.add;
   const remove = prototype.remove;
-  /** @type {WeakMap<object, number>} */
-  const pending = new WeakMap();
-  prototype.findMatches = function(doc) {
-    if (!(this instanceof Matcher)) throw new TypeError('Expected a matcher receiver');
-    if (!(doc instanceof NativeDocument)) throw new TypeError('Expected a NativeDocument');
-    if (inputLimits && doc.utf16Length > inputLimits.maxTextLength) return tooLarge('Document exceeds maxTextLength (UTF-16 units)');
-    if (scheduler.full()) return busy();
-    pending.set(this, (pending.get(this) ?? 0) + 1);
-    return scheduler.submit(() => find.call(this, doc)).finally(() => {
-      const count = (pending.get(this) ?? 1) - 1;
-      if (count) pending.set(this, count);
-      else pending.delete(this);
-    });
-  };
-  /** @param {object} matcher */
-  const assertMutable = matcher => {
-    if (pending.has(matcher)) throw Object.assign(new Error('Matcher rules cannot change while matching is pending'), { code: 'SPARS_BUSY' });
-  };
+  const assertMutable = guardSearches(prototype, Matcher, NativeDocument, ['findMatches']);
   prototype.add = function(...args) {
     assertMutable(this);
     if (kind !== 'phrase') validatePatterns(args[1], kind);
     add.apply(this, args);
   };
   prototype.remove = function(rule) { assertMutable(this); remove.call(this, rule); };
+}
+
+/**
+ * @typedef {{
+ *   findMatches(doc: import('./index.js').NativeDocument): Promise<unknown>;
+ *   annotate(doc: import('./index.js').NativeDocument): Promise<unknown>;
+ *   add(patterns: unknown): void;
+ *   remove(value: string): void;
+ *   clear(): void;
+ *   removeById?: (id: string) => void;
+ * }} RulerPrototype
+ */
+
+/**
+ * Queue ruler searches like matcher searches, check patterns before the native code reads them,
+ * and reject pattern changes while a search is pending.
+ * @param {{ prototype: RulerPrototype; [Symbol.hasInstance](value: unknown): boolean }} Ruler
+ * @param {typeof import('./index.js').NativeDocument} NativeDocument
+ * @param {'entity' | 'span'} kind
+ */
+function installRuler(Ruler, NativeDocument, kind) {
+  const prototype = Ruler.prototype;
+  if (installed.has(prototype)) return;
+  installed.add(prototype);
+  const { add, remove, clear, removeById } = prototype;
+  const assertMutable = guardSearches(prototype, Ruler, NativeDocument, ['findMatches', 'annotate']);
+  /** @param {string} message */
+  const invalid = message => Object.assign(new Error(message), { code: 'SPARS_INVALID_PATTERN' });
+  prototype.add = function(patterns) {
+    assertMutable(this);
+    for (const value of patternArray(patterns)) {
+      const pattern = patternRecord(value, ['label', 'id', 'tokens', 'phrase']);
+      if (typeof pattern.label !== 'string' || (pattern.id != null && typeof pattern.id !== 'string')) {
+        throw invalid(`A ${kind} pattern label and id must be strings`);
+      }
+      const tokens = pattern.tokens != null;
+      const phrase = pattern.phrase != null;
+      if (tokens === phrase) throw invalid(`A ${kind} pattern needs exactly one of tokens and phrase`);
+      if (tokens) validatePatterns([pattern.tokens], 'token');
+      else if (!(pattern.phrase instanceof NativeDocument)) throw invalid(`A ${kind} phrase must be a NativeDocument`);
+    }
+    add.call(this, patterns);
+  };
+  prototype.remove = function(value) { assertMutable(this); remove.call(this, value); };
+  prototype.clear = function() { assertMutable(this); clear.call(this); };
+  if (kind === 'span') {
+    if (typeof removeById !== 'function') throw new TypeError('Expected a native removeById method');
+    prototype.removeById = function(id) { assertMutable(this); removeById.call(this, id); };
+  }
+}
+
+/**
+ * @param {typeof import('./index.js').EntityRuler} EntityRuler
+ * @param {typeof import('./index.js').NativeDocument} NativeDocument
+ */
+function installEntityRuler(EntityRuler, NativeDocument) { installRuler(EntityRuler, NativeDocument, 'entity'); }
+
+/**
+ * @param {typeof import('./index.js').SpanRuler} SpanRuler
+ * @param {typeof import('./index.js').NativeDocument} NativeDocument
+ */
+function installSpanRuler(SpanRuler, NativeDocument) { installRuler(SpanRuler, NativeDocument, 'span'); }
+
+/**
+ * Pass span group attrs to the native code as JSON text, which keeps their key order, and parse them back in
+ * `toObject`. Only plain JSON values are accepted, so nothing is silently dropped or changed by `JSON.stringify`.
+ * @param {typeof import('./index.js').NativeDocument} NativeDocument
+ */
+function installDocument(NativeDocument) {
+  const prototype = NativeDocument.prototype;
+  if (installed.has(prototype)) return;
+  installed.add(prototype);
+  const toObject = prototype.toObject;
+  const withSpanGroup = prototype.withSpanGroup;
+  prototype.toObject = function() { return parseAttrs(toObject.call(this)); };
+  prototype.withSpanGroup = function(key, group) {
+    if (!group || typeof group !== 'object' || Array.isArray(group)) return withSpanGroup.call(this, key, group);
+    /** @type {Record<string, unknown>} */
+    const native = { ...group };
+    // Read attrs once, so a getter cannot return one value to the check and another to stringify.
+    const attrs = native.attrs;
+    if (attrs != null) {
+      checkJson(attrs, 'attrs');
+      native.attrs = JSON.stringify(attrs);
+    }
+    return withSpanGroup.call(this, key, /** @type {import('./index.js').SpanGroupInput} */ (/** @type {unknown} */ (native)));
+  };
+}
+
+/**
+ * Parse the JSON text the native code passes for span group attrs, in place.
+ * @param {import('./index.js').Document} document @returns {import('./index.js').Document}
+ */
+function parseAttrs(document) {
+  for (const group of document.spanGroups) {
+    group.attrs = /** @type {import('./index.js').SpanGroupAttrs} */ (JSON.parse(/** @type {string} */ (/** @type {unknown} */ (group.attrs))));
+  }
+  return document;
+}
+
+/**
+ * Check that a value is plain JSON: null, a boolean, a finite number, a well-formed string, an array without holes, or an
+ * object with the default prototype (or none) and string keys. It walks with an explicit stack, so deeply nested values
+ * get the same errors as shallow ones instead of exhausting the call stack.
+ * @param {unknown} root @param {string} name
+ */
+function checkJson(root, name) {
+  if (root === null || typeof root !== 'object' || Array.isArray(root)) throw new TypeError(`Span group ${name} must be an object`);
+  /** @type {Set<object>} Objects on the path from the root, to detect cycles while allowing shared references. */
+  const ancestors = new Set();
+  /** @type {Array<{ value: unknown, path: () => string } | { leave: object }>} */
+  const stack = [{ value: root, path: () => name }];
+  while (stack.length) {
+    const frame = /** @type {{ value: unknown, path: () => string } | { leave: object }} */ (stack.pop());
+    if ('leave' in frame) { ancestors.delete(frame.leave); continue; }
+    const { value, path } = frame;
+    // Paths are built only when an error is reported.
+    const invalid = (/** @type {string} */ reason) => new TypeError(`Span group ${path()} ${reason}`);
+    if (value === null || typeof value === 'boolean') continue;
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) throw invalid('must not contain NaN or infinite numbers');
+      continue;
+    }
+    if (typeof value === 'string') {
+      if (!value.isWellFormed()) throw Object.assign(new Error(`Span group ${path()} contains an unpaired UTF-16 surrogate`), { code: 'SPARS_INVALID_TEXT' });
+      continue;
+    }
+    if (typeof value !== 'object') throw invalid(`must be JSON, not ${typeof value}`);
+    if (ancestors.has(value)) throw invalid('must not be circular');
+    ancestors.add(value);
+    stack.push({ leave: value });
+    if (Array.isArray(value)) {
+      // A hole reads as undefined, which is rejected like any other non-JSON value.
+      for (let i = value.length - 1; i >= 0; i--) stack.push({ value: value[i], path: () => `${path()}[${i}]` });
+      continue;
+    }
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) throw invalid('must contain only plain objects and arrays');
+    const keys = Reflect.ownKeys(value);
+    for (let i = keys.length - 1; i >= 0; i--) {
+      const key = keys[i];
+      if (typeof key !== 'string') throw invalid('must not have symbol keys');
+      if (!key.isWellFormed()) throw Object.assign(new Error(`Span group ${path()} has a key with an unpaired UTF-16 surrogate`), { code: 'SPARS_INVALID_TEXT' });
+      const descriptor = /** @type {PropertyDescriptor} */ (Object.getOwnPropertyDescriptor(value, key));
+      if (!descriptor.enumerable || !('value' in descriptor)) throw invalid('must contain only enumerable data properties');
+      stack.push({ value: descriptor.value, path: () => `${path()}.${key}` });
+    }
+  }
 }
 
 /** @param {unknown} value @param {string[]} allowed @returns {Record<string, unknown>} */
@@ -308,4 +473,4 @@ function validatePatterns(value, kind) {
   }
 }
 
-module.exports = { ERROR_CODES, OFFICIAL_MODEL_NAMES, Scheduler, configureExecution, configureInputLimits, install, installMatcher, isOfficialModelName, isSparsError };
+module.exports = { ERROR_CODES, OFFICIAL_MODEL_NAMES, Scheduler, configureExecution, configureInputLimits, install, installDocument, installEntityRuler, installMatcher, installSpanRuler, isOfficialModelName, isSparsError };

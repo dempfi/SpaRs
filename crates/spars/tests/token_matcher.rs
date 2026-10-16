@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use spars::{Doc, Span, Token, TokenMatch, TokenMatcher, TokenPattern};
 use std::collections::BTreeMap;
+mod support;
 
 #[derive(Deserialize)]
 struct Fixture {
@@ -13,7 +14,6 @@ struct Case {
     text: String,
     tokens: Vec<Token>,
     sentences: Vec<Span>,
-    entities: Vec<Span>,
     noun_chunks: Vec<Span>,
     rules: Vec<Rule>,
     expected: Vec<TokenMatch>,
@@ -33,7 +33,7 @@ struct Storage<'a> {
     text: &'a str,
     tokens: &'a [Token],
     sentences: &'a [Span],
-    entities: &'a [Span],
+    entities: Vec<Span>,
     noun_chunks: &'a [Span],
 }
 
@@ -353,7 +353,7 @@ fn check_with(
                     text: &case.text,
                     tokens: &case.tokens,
                     sentences: &case.sentences,
-                    entities: &case.entities,
+                    entities: support::entities_from_tags(&case.tokens),
                     noun_chunks: &case.noun_chunks,
                 },
             })

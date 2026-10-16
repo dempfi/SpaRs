@@ -51,12 +51,20 @@ fn doc(text: &str) -> Doc {
         tokens: text
             .char_indices()
             .enumerate()
-            .map(|(cp, (i, c))| crate::Token::new(i, i + c.len_utf8(), cp, c.to_string()))
+            .map(|(cp, (i, c))| {
+                crate::Token::new(
+                    crate::ByteOffset(i),
+                    crate::ByteOffset(i + c.len_utf8()),
+                    crate::CodePointOffset(cp),
+                    c.to_string(),
+                )
+            })
             .collect(),
         entities: None,
         sentences: None,
         noun_chunks: None,
         tensor: Vec::new(),
+        span_groups: Default::default(),
         dependency_index: OnceLock::new(),
     }
 }

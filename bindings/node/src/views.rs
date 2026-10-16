@@ -24,7 +24,7 @@ pub struct NativeToken {
     pub(crate) index: spars::TokenIndex,
 }
 
-/// A checked half-open token interval retaining its native document.
+/// Tokens `start` (inclusive) to `end` (exclusive) of a document. It keeps the document alive.
 #[napi]
 pub struct NativeSpan {
     pub(crate) doc: Arc<spars::Doc>,
@@ -59,6 +59,10 @@ pub struct TokenAnnotations {
     pub entity_iob: Option<String>,
     #[napi(ts_type = "EntityLabel | ''")]
     pub entity_type: Option<String>,
+    /// spaCy's `Token.ent_id_`, or `''` without one. Set only by `withEntities` and
+    /// `EntityRuler.annotate`, never by the recognizer; a token keeps its ID when it stops being part
+    /// of an entity, as in spaCy.
+    pub entity_id: String,
 }
 
 #[napi]
@@ -68,11 +72,13 @@ impl NativeDocument {
         self.inner.text().to_owned()
     }
 
+    /// Number of tokens, like spaCy `len(doc)`; see `utf16Length` for the text length.
     #[napi(getter)]
     pub fn length(&self, env: Env) -> Result<u32> {
         errors::number(self.inner.tokens().len()).map_err(|error| error.into_napi(env))
     }
 
+    /// Throws `SPARS_BOUNDS` unless `0 <= index < length`.
     #[napi(strict)]
     pub fn token(&self, env: Env, value: f64) -> Result<NativeToken> {
         let index = index(value, env)?;
@@ -85,6 +91,8 @@ impl NativeDocument {
         })
     }
 
+    /// Tokens `start` (inclusive) to `end` (exclusive), like spaCy `doc[start:end]`. Throws
+    /// `SPARS_BOUNDS` unless `0 <= start <= end <= length`.
     #[napi(strict)]
     pub fn span(&self, env: Env, start: f64, end: f64) -> Result<NativeSpan> {
         let (start, end) = (index(start, env)?, index(end, env)?);
@@ -171,8 +179,11 @@ impl NativeToken {
             sentence_start: token.sentence_start,
             entity_iob: token.entity_iob.clone(),
             entity_type: token.entity_type.clone(),
+            entity_id: token.entity_id.clone().unwrap_or_default(),
         })
     }
+    /// The syntactic head, like spaCy `Token.head`. A root returns itself; null when the document
+    /// has no parse.
     #[napi]
     pub fn head(&self) -> Either<NativeToken, Null> {
         match self.view().head() {
@@ -183,6 +194,7 @@ impl NativeToken {
             None => Either::B(Null),
         }
     }
+    /// A one-token span.
     #[napi]
     pub fn span(&self) -> NativeSpan {
         let span = self.view().span();
@@ -192,6 +204,8 @@ impl NativeToken {
             end: span.end(),
         }
     }
+    /// Direct dependents in token order. Throws `SPARS_INFERENCE` when any token lacks a head or the
+    /// heads form a cycle.
     #[napi]
     pub fn children(&self, env: Env) -> Result<Vec<NativeToken>> {
         self.view()
@@ -199,6 +213,8 @@ impl NativeToken {
             .map(|tokens| self.handles(tokens))
             .map_err(|error| boundary(error, env))
     }
+    /// Heads from the immediate parent up to the root, excluding this token. Throws
+    /// `SPARS_INFERENCE` when any token lacks a head or the heads form a cycle.
     #[napi]
     pub fn ancestors(&self, env: Env) -> Result<Vec<NativeToken>> {
         self.view()
@@ -206,6 +222,9 @@ impl NativeToken {
             .map(|tokens| self.handles(tokens))
             .map_err(|error| boundary(error, env))
     }
+    /// This token and its descendants in spaCy order (left subtrees, this token, right subtrees),
+    /// which is not necessarily ascending. Throws `SPARS_INFERENCE` when any token lacks a head or
+    /// the heads form a cycle.
     #[napi]
     pub fn subtree(&self, env: Env) -> Result<Vec<NativeToken>> {
         self.view()
@@ -213,6 +232,8 @@ impl NativeToken {
             .map(|tokens| self.handles(tokens))
             .map_err(|error| boundary(error, env))
     }
+    /// The containing sentence, like spaCy `Token.sent`. Throws `SPARS_INFERENCE` without sentence
+    /// annotations (before `Parser`).
     #[napi]
     pub fn sentence(&self, env: Env) -> Result<NativeSpan> {
         self.view()
@@ -236,6 +257,8 @@ impl NativeSpan {
     pub fn end(&self, env: Env) -> Result<u32> {
         errors::number(self.end.0).map_err(|error| error.into_napi(env))
     }
+    /// Text from the first token to the end of the last token, without its trailing whitespace;
+    /// `''` for an empty span.
     #[napi(getter)]
     pub fn text(&self) -> String {
         self.doc

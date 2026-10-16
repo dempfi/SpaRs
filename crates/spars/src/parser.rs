@@ -206,6 +206,7 @@ impl Model {
                     start: TokenIndex(i),
                     end: TokenIndex(*sentence_starts.get(j + 1).unwrap_or(&n)),
                     label: String::new(),
+                    id: None,
                 })
                 .collect(),
         );

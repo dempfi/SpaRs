@@ -60,22 +60,16 @@ fn doc(case: &Case) -> Doc {
         let start = text.len();
         let idx = text.chars().count();
         text.push_str(word);
-        tokens.push(Token {
-            start: spars::ByteOffset(start),
-            end: spars::ByteOffset(text.len()),
-            idx: spars::CodePointOffset(idx),
-            whitespace: *space,
-            norm: word.clone(),
-            tag: None,
-            pos: None,
-            morphology: None,
-            lemma: None,
-            head: None,
-            dep: None,
-            sentence_start: None,
-            entity_iob: entity.iob.clone(),
-            entity_type: entity.r#type.clone(),
-        });
+        let mut token = Token::new(
+            spars::ByteOffset(start),
+            spars::ByteOffset(text.len()),
+            spars::CodePointOffset(idx),
+            word.clone(),
+        );
+        token.whitespace = *space;
+        token.entity_iob = entity.iob.clone();
+        token.entity_type = entity.r#type.clone();
+        tokens.push(token);
         if *space {
             text.push(' ');
         }
@@ -189,4 +183,27 @@ fn model_predictions_equal_the_recorded_initial_state() {
         assert_state(&document, expected, &format!("model update {step}"));
         assert_eq!(without_entities(&document), original, "model update {step}");
     }
+}
+
+#[test]
+fn update_leaving_an_untyped_inside_tag_after_a_blocked_token_is_rejected() {
+    // A snapshot may continue an entity with an `I` that stores no type, as spaCy's tags can.
+    let snapshot = r#"{"format_version":1,"document":{"text":"a b","tokens":[
+        {"start":0,"end":1,"idx":0,"whitespace":true,"norm":"a","entity_iob":"B","entity_type":"X"},
+        {"start":2,"end":3,"idx":2,"whitespace":false,"norm":"b","entity_iob":"I","entity_type":""}
+    ],"entities":[{"start":0,"end":2,"label":"X"}]}}"#;
+    let mut doc = Doc::from_json(snapshot).unwrap();
+    let before = doc.clone();
+    // Blocking the first token leaves the `I` with no entity to continue; its empty type matches
+    // the blocked token's, so the repair step keeps it. spaCy writes this update and raises E093
+    // when `doc.ents` is next read; SpaRs rejects it without changing the document.
+    let update: EntityUpdate = serde_json::from_str(
+        r#"{"entities":[],"blocked":[{"start":0,"end":1}],"default":"unmodified"}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        doc.set_entities(&update),
+        Err(Error::Unsupported(_))
+    ));
+    assert_eq!(doc, before);
 }

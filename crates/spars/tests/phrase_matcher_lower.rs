@@ -45,22 +45,15 @@ fn annotated_doc(words: &[String], spaces: &[bool], starts: &[bool]) -> Doc {
         let start = text.len();
         let idx = text.chars().count();
         text.push_str(word);
-        tokens.push(Token {
-            start: spars::ByteOffset(start),
-            end: spars::ByteOffset(text.len()),
-            idx: spars::CodePointOffset(idx),
-            whitespace: *space,
-            norm: word.clone(),
-            tag: None,
-            pos: None,
-            morphology: None,
-            lemma: None,
-            head: None,
-            dep: None,
-            sentence_start: starts.get(tokens.len()).copied(),
-            entity_iob: None,
-            entity_type: None,
-        });
+        let mut token = Token::new(
+            spars::ByteOffset(start),
+            spars::ByteOffset(text.len()),
+            spars::CodePointOffset(idx),
+            word.clone(),
+        );
+        token.whitespace = *space;
+        token.sentence_start = starts.get(tokens.len()).copied();
+        tokens.push(token);
         if *space {
             text.push(' ');
         }

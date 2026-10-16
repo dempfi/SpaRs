@@ -1,10 +1,13 @@
 //! Reusable patterns over contiguous tokens, with explicit repetition.
 mod engine;
+mod start_index;
 use crate::dependency_matcher::predicates::{
     compile_conditions, CompiledConditions, LengthChecks, LexicalTest,
 };
 use crate::{Doc, Error, Lexicon, Result, TokenConstraint, TokenIndex};
 use serde::{Deserialize, Serialize};
+use start_index::StartIndex;
+use std::collections::{HashMap, HashSet};
 
 /// An ordered sequence of token conditions.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -61,14 +64,17 @@ struct CompiledPattern {
     nodes: Vec<Node>,
 }
 struct Rule {
-    name: String,
     patterns: Vec<TokenPattern>,
 }
 /// Compile rules once and reuse them across independent document calls.
 #[derive(Default)]
 pub struct TokenMatcher {
     rules: Vec<Rule>,
+    // The position of each rule in `rules`, so lookups do not scan every rule.
+    index: HashMap<String, usize>,
     compiled: Vec<CompiledPattern>,
+    // Kept consistent with `compiled` by `add` and `remove`.
+    starts: StartIndex,
     lexicon: Option<Lexicon>,
 }
 impl TokenMatcher {
@@ -90,17 +96,42 @@ impl TokenMatcher {
         self.rules.is_empty()
     }
     pub fn contains(&self, name: &str) -> bool {
-        self.rules.iter().any(|rule| rule.name == name)
+        self.index.contains_key(name)
     }
     pub fn get(&self, name: &str) -> Option<&[TokenPattern]> {
-        self.rules
-            .iter()
-            .find(|rule| rule.name == name)
-            .map(|rule| rule.patterns.as_slice())
+        self.index
+            .get(name)
+            .map(|&i| self.rules[i].patterns.as_slice())
     }
     /// Validate every pattern before modifying the matcher. Repeated names append patterns.
     pub fn add(&mut self, name: impl Into<String>, patterns: Vec<TokenPattern>) -> Result<()> {
         let name = name.into();
+        self.check_lexicon(&patterns)?;
+        let compiled = patterns
+            .iter()
+            .map(|pattern| compile(&name, pattern))
+            .collect::<Result<Vec<_>>>()?;
+        if let Some(&i) = self.index.get(&name) {
+            self.rules[i].patterns.extend(patterns);
+        } else {
+            self.index.insert(name, self.rules.len());
+            self.rules.push(Rule { patterns });
+        }
+        // This order includes later additions to an already registered rule.
+        for pattern in compiled {
+            self.starts.push(self.compiled.len(), &pattern);
+            self.compiled.push(pattern);
+        }
+        Ok(())
+    }
+    /// Return the error [`TokenMatcher::add`] would return for these patterns, without adding them.
+    pub(crate) fn check(&self, name: &str, patterns: &[TokenPattern]) -> Result<()> {
+        self.check_lexicon(patterns)?;
+        patterns
+            .iter()
+            .try_for_each(|pattern| compile(name, pattern).map(drop))
+    }
+    fn check_lexicon(&self, patterns: &[TokenPattern]) -> Result<()> {
         if self.lexicon.is_none()
             && patterns
                 .iter()
@@ -112,32 +143,97 @@ impl TokenMatcher {
                 "lexical flag conditions require a matcher created with a lexicon".into(),
             ));
         }
-        let compiled = patterns
-            .iter()
-            .map(|pattern| compile(&name, pattern))
-            .collect::<Result<Vec<_>>>()?;
-        if let Some(rule) = self.rules.iter_mut().find(|rule| rule.name == name) {
-            rule.patterns.extend(patterns);
-        } else {
-            self.rules.push(Rule { name, patterns });
-        }
-        // This order includes later additions to an already registered rule.
-        self.compiled.extend(compiled);
         Ok(())
     }
     pub fn remove(&mut self, name: &str) -> Result<()> {
         let index = self
-            .rules
-            .iter()
-            .position(|rule| rule.name == name)
+            .index
+            .remove(name)
             .ok_or_else(|| Error::Pattern(format!("unknown token rule {name:?}")))?;
-        self.rules.remove(index);
-        self.compiled.retain(|pattern| pattern.name != name);
+        // Each registered pattern has exactly one compiled pattern.
+        let count = self.rules.remove(index).patterns.len();
+        // Visiting the values directly avoids hashing every later rule name.
+        for position in self.index.values_mut() {
+            if *position > index {
+                *position -= 1;
+            }
+        }
+        let removed: Vec<usize> = (0..self.compiled.len())
+            .filter(|&position| self.compiled[position].name == name)
+            .take(count)
+            .collect();
+        self.starts.remove(&removed);
+        if let [only] = removed[..] {
+            self.compiled.remove(only);
+        } else {
+            let mut position = 0;
+            self.compiled.retain(|_| {
+                position += 1;
+                removed.binary_search(&(position - 1)).is_err()
+            });
+        }
         Ok(())
     }
-    /// Return overlapping matches in the reference state-machine emission order.
+    /// Remove every registered rule in `names`, ignoring unknown names, in one pass over the rules
+    /// and compiled patterns; removing rules one at a time costs a pass each.
+    pub(crate) fn remove_all(&mut self, names: &HashSet<&str>) {
+        let mut kept = vec![true; self.rules.len()];
+        self.index.retain(|name, &mut position| {
+            let keep = !names.contains(name.as_str());
+            kept[position] = keep;
+            keep
+        });
+        // Each kept rule moves down by the number of removed rules before it.
+        let mut shift = Vec::with_capacity(kept.len());
+        let mut dropped = 0;
+        for &keep in &kept {
+            shift.push(dropped);
+            dropped += usize::from(!keep);
+        }
+        for position in self.index.values_mut() {
+            *position -= shift[*position];
+        }
+        let mut position = 0;
+        self.rules.retain(|_| {
+            position += 1;
+            kept[position - 1]
+        });
+        let removed: Vec<usize> = (0..self.compiled.len())
+            .filter(|&position| names.contains(self.compiled[position].name.as_str()))
+            .collect();
+        self.starts.remove(&removed);
+        self.compiled
+            .retain(|pattern| !names.contains(pattern.name.as_str()));
+    }
+    /// Return every match, overlapping ones included, in spaCy `Matcher` order rather than
+    /// sorted by start. A matcher without rules returns no matches and no error.
+    ///
+    /// Returns [`Error::MissingAnnotation`] when an `Equals` condition compares lemma, POS, tag,
+    /// dependency label or morphology and no token of a nonempty `doc` has that annotation,
+    /// like spaCy's error E155; with several such attributes it names the first missing one in
+    /// spaCy's order: tag, POS, morphology, lemma, dependency label. An empty lemma, POS, tag or
+    /// label counts as missing; empty morphology counts as present. Other predicates never
+    /// require the annotation, and a token without it compares as the empty string (see the
+    /// Token Matcher guide for missing morphology). Returns [`Error::Unsupported`] when any
+    /// condition compares morphology and a token's morphology is not in spaCy's canonical
+    /// `Field=Value|...` order.
     pub fn find_matches(&self, doc: &Doc) -> Result<Vec<TokenMatch>> {
-        engine::find(&self.compiled, doc, self.lexicon.as_ref())
+        engine::find(
+            &self.compiled,
+            engine::Starts::Indexed(&self.starts),
+            doc,
+            self.lexicon.as_ref(),
+        )
+    }
+    /// The same search, starting every pattern at every token as spaCy does.
+    #[cfg(test)]
+    fn find_matches_unindexed(&self, doc: &Doc) -> Result<Vec<TokenMatch>> {
+        engine::find(
+            &self.compiled,
+            engine::Starts::All,
+            doc,
+            self.lexicon.as_ref(),
+        )
     }
 }
 fn compile(name: &str, pattern: &TokenPattern) -> Result<CompiledPattern> {
