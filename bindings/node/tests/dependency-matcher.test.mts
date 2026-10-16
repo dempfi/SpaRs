@@ -267,5 +267,9 @@ test('missing dependency heads and unavailable constrained annotations reject as
   await assert.rejects(matcher.findMatches(doc));
   matcher.remove('rule');
   matcher.add('lemma', [{ nodes: [{ id: 'a', constraints: [{ attribute: 'lemma', predicate: { kind: 'equals', value: 'a' } }] }] }]);
-  await assert.rejects(matcher.findMatches(tiny()));
+  await assert.rejects(matcher.findMatches(tiny()), (error: unknown) => error instanceof Error && 'code' in error && error.code === 'SPARS_INFERENCE' && /lemma/.test(error.message));
+  // Membership conditions need no annotated token, as in spaCy 3.8.14.
+  matcher.remove('lemma');
+  matcher.add('other', [{ nodes: [{ id: 'a', constraints: [{ attribute: 'lemma', predicate: { kind: 'not_in', values: ['a'] } }] }] }]);
+  assert.equal((await matcher.findMatches(tiny())).length, 2);
 });

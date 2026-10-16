@@ -279,3 +279,64 @@ fn empty_labels_claim_tokens_without_adding_entities() {
     assert_eq!(annotated.entities(), Some(&[][..]));
     assert_eq!(ruler.labels(), ["", "SHORT"]);
 }
+// The ruler's token patterns follow spaCy 3.8.14's `Matcher`: a lemma condition needs only one
+// annotated token, and other tokens compare as having the empty lemma.
+#[test]
+fn token_patterns_match_partly_annotated_documents_like_spacy() {
+    let lemma = |predicate: serde_json::Value| -> TokenPattern {
+        serde_json::from_value(serde_json::json!({"tokens": [{
+            "constraints": [{"attribute": "lemma", "predicate": predicate}],
+            "repetition": {"kind": "once"},
+        }]}))
+        .unwrap()
+    };
+    let mut ruler = ruler();
+    ruler
+        .add(&[
+            tokens(
+                "X",
+                None,
+                lemma(serde_json::json!({"kind": "equals", "value": "x"})),
+            ),
+            tokens(
+                "Y",
+                None,
+                lemma(serde_json::json!({"kind": "not_in", "values": ["x"]})),
+            ),
+        ])
+        .unwrap();
+    let mut document = doc("a b");
+    document.tokens[0].lemma = Some("x".into());
+    assert_eq!(
+        labels(&ruler.annotated(&document).unwrap()),
+        [(0, 1, "X", None), (1, 2, "Y", None)]
+    );
+    assert!(matches!(
+        ruler.find_matches(&doc("a b")),
+        Err(Error::MissingAnnotation("lemma"))
+    ));
+}
+
+// spaCy 3.8.14's ruler still raises E155 after `remove` until `clear`; SpaRs checks the current
+// patterns only, an accepted difference in docs/SPACY_DIFFERENCES.md.
+#[test]
+fn removed_token_patterns_do_not_require_annotations() {
+    let lemma: TokenPattern = serde_json::from_value(serde_json::json!({"tokens": [{
+        "constraints": [{"attribute": "lemma", "predicate": {"kind": "equals", "value": "x"}}],
+        "repetition": {"kind": "once"},
+    }]}))
+    .unwrap();
+    let mut ruler = ruler();
+    ruler
+        .add(&[tokens("X", Some("l"), lemma), tokens("Y", None, word("a"))])
+        .unwrap();
+    assert!(matches!(
+        ruler.find_matches(&doc("a b")),
+        Err(Error::MissingAnnotation("lemma"))
+    ));
+    ruler.remove("l").unwrap();
+    assert_eq!(
+        labels(&ruler.annotated(&doc("a b")).unwrap()),
+        [(0, 1, "Y", None)]
+    );
+}

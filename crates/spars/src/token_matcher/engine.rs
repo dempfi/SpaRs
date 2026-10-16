@@ -1,6 +1,6 @@
 use super::start_index::StartIndex;
 use super::{CompiledPattern, Quantifier, TokenMatch};
-use crate::dependency_matcher::predicates::{Needs, TokenValues};
+use crate::dependency_matcher::predicates::{validate_constraints, Needs, TokenValues};
 use crate::{Doc, Lexicon, Result, TokenIndex};
 use std::collections::HashSet;
 
@@ -30,18 +30,12 @@ pub(super) fn find(
     if patterns.iter().all(|pattern| pattern.nodes.is_empty()) {
         return Ok(Vec::new());
     }
-    let mut checked = HashSet::new();
-    for constraint in patterns
+    let constraints = patterns
         .iter()
         .flat_map(|p| &p.items)
-        .flat_map(|item| &item.constraints)
-    {
-        if checked.insert(constraint.attribute()) {
-            constraint.validate_document(doc)?;
-        }
-    }
+        .flat_map(|item| &item.constraints);
     let mut needs = Needs {
-        lower: checked.contains(&crate::TokenAttribute::Lower),
+        lower: validate_constraints(constraints, doc)?,
         ..Needs::default()
     };
     for item in patterns.iter().flat_map(|pattern| &pattern.items) {

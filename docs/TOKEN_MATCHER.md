@@ -167,7 +167,7 @@ The operators are `==`, `!=`, `>=`, `<=`, `>` and `<`. The value may be a whole 
 
 ## Compare with a set of values
 
-spaCy's `IS_SUBSET`, `IS_SUPERSET` and `INTERSECTS` compare a token with a list of values. SpaRs supports them on every string attribute (`Text`, `Lower`, `Norm`, `Lemma`, `Pos`, `Tag`, `Dep` and `Morphology`) and on `Length`. Annotation attributes such as `Morphology` need a document with those annotations, for example one processed by the model; `Length` needs only the token text. This example finds plural words of three or four characters.
+spaCy's `IS_SUBSET`, `IS_SUPERSET` and `INTERSECTS` compare a token with a list of values. SpaRs supports them on every string attribute (`Text`, `Lower`, `Norm`, `Lemma`, `Pos`, `Tag`, `Dep` and `Morphology`) and on `Length`. Annotation attributes such as `Morphology` read the document's annotations, so use a document processed by the model. For tokens without the annotation, see [Missing annotations](#missing-annotations). `Length` needs only the token text. This example finds plural words of three or four characters.
 
 ```rust
 use spars::{Model, Predicate, TokenAttribute, TokenConstraint, TokenIndex, TokenMatcher,
@@ -233,7 +233,15 @@ Negation consumes a token; it is not a check between tokens. Zero-length results
 
 Results preserve the pinned spaCy matcher's discovery order, including optional suffixes at the end of the document. They are not sorted by start position or grouped by rule. Identical `(rule, start, end)` results appear once, even when several patterns or repetition paths produce them. Different rule names can match the same span.
 
-Requested annotations must be available throughout the document. Missing annotations return errors, including when another condition would have ruled out the token. Items with an exact zero count are discarded and do not require annotations. Text, lowercase, lexical flag and length conditions do not require dependency heads or linguistic annotations. Invalid patterns and unsupported serialized enum values return errors.
+Items with an exact zero count are discarded and do not require annotations. Text, lowercase, norm, lexical flag and length conditions do not require dependency heads or linguistic annotations. Invalid patterns and unsupported serialized enum values return errors.
+
+### Missing annotations
+
+On a nonempty document, an `Equals` condition on `Lemma`, `Pos` (the coarse part-of-speech tag), `Tag` (the fine-grained tag), `Dep` or `Morphology` needs at least one token with that annotation; otherwise matching returns `Error::MissingAnnotation`, even when another condition would have ruled out every token. An empty document never returns this error. When several such attributes are missing, the error names the first in spaCy's order: tag, part-of-speech tag, morphology, lemma, dependency label. This follows spaCy's error E155, which checks `Doc.has_annotation` and so accepts a partly annotated document, such as one restored from a snapshot in which only some tokens have lemmas. An empty lemma, part-of-speech tag, fine-grained tag or dependency label counts as missing, as in spaCy, while the empty morphology analysis counts as present. Membership (`In`, `NotIn`) and set conditions never require the annotation, as in spaCy.
+
+A token without the annotation compares as the empty string `""`, so `Equals` with `""`, an `In` or set list that contains `""`, a `NotIn` list without `""`, and an empty `IsSuperset` match it. Missing morphology is spaCy's unset analysis, which differs from the known-empty analysis `_`: `Equals` matches it only with `""` (never `"_"`), `In` never matches it and `NotIn` always does, even `NotIn [""]`, and as a feature set it is empty, so it satisfies `IsSubset` and an empty `IsSuperset` but never `Intersects`.
+
+spaCy keeps requiring an annotation that an `Equals` condition compared even after the rule containing that condition is removed. SpaRs checks only the current rules; this is an [accepted difference](SPACY_DIFFERENCES.md#annotations-required-by-removed-rules).
 
 ## Scope and cost
 

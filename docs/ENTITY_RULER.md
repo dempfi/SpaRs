@@ -90,17 +90,18 @@ Like spaCy, the ruler stores a pattern with an ID under the rule name `label + i
 
 ## Differences from spaCy
 
-These differences are SpaRs's intended behavior; [accepted differences from spaCy](SPACY_DIFFERENCES.md#entityruler) gives spaCy's behavior, the reason and the tests for each.
+These differences are SpaRs's intended behavior; [accepted differences from spaCy](SPACY_DIFFERENCES.md) gives spaCy's behavior, the reason and the tests for each.
 
 - **Ties between identical spans.** When patterns with different labels or IDs match exactly the same tokens, SpaRs keeps the rule that received its first pattern earliest; a rule removed and added again counts from its new addition. spaCy's choice depends on hashes of the rule names.
 - **Removing a rule with both kinds of pattern.** `remove` removes an ID's token patterns and phrases at once, so a second `remove` of that ID fails. spaCy 3.8.14 removes only the phrases from matching, so the token patterns keep producing entities until a second `remove`.
 - **Failed changes.** A failed `add` or `remove` changes nothing, where spaCy can be left partly changed.
 - **Empty separator.** An empty ID separator is rejected when the ruler is created, where spaCy fails later when labels, IDs or patterns are read once it has patterns.
+- **Annotations of removed patterns.** After `remove`, the ruler no longer requires the annotations its removed token patterns compared with `Equals`; spaCy keeps requiring them until `clear` (see [annotations required by removed rules](SPACY_DIFFERENCES.md#annotations-required-by-removed-rules)).
 - **Not provided.** The `__contains__` check, the `validate` setting (SpaRs always checks patterns), fuzzy matching (`matcher_fuzzy_compare`), `initialize`, scoring, loading or saving patterns (JSONL, `to_disk`, `to_bytes`), spaCy's pattern-dictionary format, knowledge-base IDs, the warning for a ruler without patterns, and running the ruler as a pipeline component or before the recognizer. Callers apply the ruler to processed documents.
 
 ## Reuse and errors
 
-Annotating does not change the ruler, so one ruler can annotate many documents. Adding, removing and clearing patterns need `&mut EntityRuler`. Errors from matching or from `set_entities`, such as a token IOB tag other than `B`, `I` or `O`, which only assigning the public field directly can produce, leave the document unchanged.
+Annotating does not change the ruler, so one ruler can annotate many documents. Adding, removing and clearing patterns need `&mut EntityRuler`. Matching or annotating a nonempty document returns `Error::MissingAnnotation` when a token pattern has an `Equals` condition on `Lemma`, `Pos`, `Tag`, `Dep` or `Morphology` and no token has that annotation; other tokens compare as described in [missing annotations](TOKEN_MATCHER.md#missing-annotations). spaCy keeps requiring such an annotation after `remove` drops the pattern that compared it, until `clear`; SpaRs checks only the current patterns, an [accepted difference](SPACY_DIFFERENCES.md#annotations-required-by-removed-rules). Errors from matching or from `set_entities`, such as a token IOB tag other than `B`, `I` or `O`, which only assigning the public field directly can produce, leave the document unchanged.
 
 ## Verification
 

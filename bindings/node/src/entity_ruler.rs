@@ -307,9 +307,13 @@ impl EntityRuler {
     /// phrase matches without empty ones and duplicates, longest first, then earliest, and matches
     /// over the same tokens in the order their rules were added. Matches may overlap one another
     /// and existing entities; `annotate` applies that filtering. Rejects with `SPARS_INFERENCE` when
-    /// a token condition's annotation is null on any document token, for example `lemma` before
-    /// `Lemmatizer`, and with `SPARS_BUSY` or `SPARS_INPUT_LIMIT` under `configureExecution` and
-    /// `configureInputLimits`. Throws `TypeError` when `doc` is not a `NativeDocument`.
+    /// an `equals` token condition on `lemma`, `pos`, `tag`, `dep` or `morphology` meets a nonempty
+    /// document in which no token has that annotation (`''` counts as missing except for
+    /// `morphology`), for example `lemma` before `Lemmatizer`, like spaCy's error E155; with
+    /// `SPARS_UNSUPPORTED` when a token condition or a `MORPH` phrase attribute compares
+    /// noncanonical document morphology; and with `SPARS_BUSY` or `SPARS_INPUT_LIMIT` under
+    /// `configureExecution` and `configureInputLimits`. Throws
+    /// `TypeError` when `doc` is not a `NativeDocument`.
     #[napi(strict, ts_return_type = "Promise<Array<EntityMatch>>")]
     pub fn find_matches(&self, doc: &NativeDocument) -> AsyncTask<EntityMatchTask> {
         AsyncTask::new(EntityMatchTask {

@@ -644,3 +644,408 @@ fn rejected_registration_leaves_indexed_starts_unchanged() {
         Ok(found)
     );
 }
+
+fn one_token(
+    attribute: crate::TokenAttribute,
+    predicate: crate::Predicate,
+    repetition: Repetition,
+) -> TokenMatcher {
+    let mut matcher = TokenMatcher::new();
+    matcher
+        .add(
+            "r",
+            vec![TokenPattern {
+                tokens: vec![TokenPatternItem {
+                    constraints: vec![TokenConstraint {
+                        attribute,
+                        predicate,
+                    }],
+                    repetition,
+                }],
+            }],
+        )
+        .unwrap();
+    matcher
+}
+fn starts(matcher: &TokenMatcher, doc: &Doc) -> Result<Vec<usize>> {
+    Ok(matcher
+        .find_matches(doc)?
+        .into_iter()
+        .map(|m| m.start.0)
+        .collect())
+}
+fn values(values: &[&str]) -> Vec<String> {
+    values.iter().map(|&value| value.into()).collect()
+}
+fn set_annotation(token: &mut Token, attribute: crate::TokenAttribute, value: Option<&str>) {
+    let value = value.map(str::to_owned);
+    match attribute {
+        crate::TokenAttribute::Lemma => token.lemma = value,
+        crate::TokenAttribute::Pos => token.pos = value,
+        crate::TokenAttribute::Tag => token.tag = value,
+        crate::TokenAttribute::Dep => token.dep = value,
+        crate::TokenAttribute::Morphology => token.morphology = value,
+        _ => unreachable!("only annotation attributes are set"),
+    }
+}
+
+// Expected starts are spaCy 3.8.14 `Matcher` results for single-token patterns on a
+// three-token `Doc` whose first token alone has the annotation. spaCy raises E155 only when
+// no token has an annotation that a direct-equality condition compares, and reads a missing
+// value as the empty string.
+#[test]
+fn partly_annotated_documents_compare_missing_values_as_empty_like_spacy() {
+    use crate::Predicate::*;
+    for (attribute, annotated) in [
+        (crate::TokenAttribute::Lemma, "x"),
+        (crate::TokenAttribute::Pos, "NOUN"),
+        (crate::TokenAttribute::Tag, "x"),
+        (crate::TokenAttribute::Dep, "x"),
+    ] {
+        let mut document = doc("abc");
+        set_annotation(&mut document.tokens[0], attribute, Some(annotated));
+        let cases: [(crate::Predicate, &[usize]); 11] = [
+            (
+                Equals {
+                    value: annotated.into(),
+                },
+                &[0],
+            ),
+            (
+                IsSuperset {
+                    values: values(&[annotated]),
+                },
+                &[0],
+            ),
+            (Equals { value: "".into() }, &[1, 2]),
+            (
+                In {
+                    values: values(&[""]),
+                },
+                &[1, 2],
+            ),
+            (
+                NotIn {
+                    values: values(&[annotated]),
+                },
+                &[1, 2],
+            ),
+            (
+                NotIn {
+                    values: values(&[""]),
+                },
+                &[0],
+            ),
+            (
+                IsSubset {
+                    values: values(&[""]),
+                },
+                &[1, 2],
+            ),
+            (
+                IsSubset {
+                    values: values(&[annotated]),
+                },
+                &[0],
+            ),
+            (
+                IsSuperset {
+                    values: values(&[""]),
+                },
+                &[1, 2],
+            ),
+            (IsSuperset { values: Vec::new() }, &[0, 1, 2]),
+            (
+                Intersects {
+                    values: values(&[""]),
+                },
+                &[1, 2],
+            ),
+        ];
+        for (predicate, expected) in cases {
+            let label = format!("{attribute:?} {predicate:?}");
+            let matcher = one_token(attribute, predicate, Repetition::Once);
+            assert_eq!(starts(&matcher, &document).unwrap(), expected, "{label}");
+        }
+        // A negated item consumes the tokens whose missing value differs from the pattern.
+        let equals = Equals {
+            value: annotated.into(),
+        };
+        let negated = one_token(attribute, equals, Repetition::Negated);
+        assert_eq!(
+            starts(&negated, &document).unwrap(),
+            [1, 2],
+            "{attribute:?}"
+        );
+    }
+}
+
+// spaCy distinguishes a token without morphology (an unset analysis, compared as `""`) from
+// one with the known-empty analysis `_`. Expected starts are spaCy 3.8.14 results for tokens
+// with `Number=Plur`, the empty analysis, and no morphology.
+#[test]
+fn missing_morphology_differs_from_the_empty_analysis_like_spacy() {
+    use crate::Predicate::*;
+    let mut document = doc("abc");
+    document.tokens[0].morphology = Some("Number=Plur".into());
+    document.tokens[1].morphology = Some(String::new());
+    let plural = || values(&["Number=Plur"]);
+    let cases: [(crate::Predicate, &[usize]); 16] = [
+        (
+            Equals {
+                value: "Number=Plur".into(),
+            },
+            &[0],
+        ),
+        (Equals { value: "".into() }, &[2]),
+        (Equals { value: "_".into() }, &[1]),
+        (
+            In {
+                values: values(&[""]),
+            },
+            &[1],
+        ),
+        (
+            In {
+                values: values(&["_"]),
+            },
+            &[1],
+        ),
+        (
+            NotIn {
+                values: values(&[""]),
+            },
+            &[0, 2],
+        ),
+        (
+            NotIn {
+                values: values(&["_"]),
+            },
+            &[0, 2],
+        ),
+        (NotIn { values: plural() }, &[1, 2]),
+        (IsSubset { values: Vec::new() }, &[1, 2]),
+        (IsSubset { values: plural() }, &[0, 1, 2]),
+        (IsSuperset { values: Vec::new() }, &[0, 1, 2]),
+        (IsSuperset { values: plural() }, &[0]),
+        (Intersects { values: Vec::new() }, &[]),
+        (Intersects { values: plural() }, &[0]),
+        (MorphSuperset { values: plural() }, &[0]),
+        (MorphIntersects { values: plural() }, &[0]),
+    ];
+    for (predicate, expected) in cases {
+        let label = format!("{predicate:?}");
+        let matcher = one_token(
+            crate::TokenAttribute::Morphology,
+            predicate,
+            Repetition::Once,
+        );
+        assert_eq!(starts(&matcher, &document).unwrap(), expected, "{label}");
+    }
+}
+
+// spaCy 3.8.14 raises E155 for a direct-equality condition, including one with the empty
+// string and one under any repetition other than a zero count, when no token has the annotation; an empty lemma, POS, tag or dependency label counts
+// as missing, while the empty morphology analysis counts as present. Membership and set
+// conditions never raise it and compare missing values as empty.
+#[test]
+fn only_equality_requires_an_annotated_token_like_spacy() {
+    use crate::Predicate::*;
+    for (attribute, value, name) in [
+        (crate::TokenAttribute::Lemma, "x", "lemma"),
+        (crate::TokenAttribute::Pos, "NOUN", "POS"),
+        (crate::TokenAttribute::Tag, "x", "tag"),
+        (crate::TokenAttribute::Dep, "x", "dependency label"),
+        (
+            crate::TokenAttribute::Morphology,
+            "Number=Sing",
+            "morphology",
+        ),
+    ] {
+        let is_morph = attribute == crate::TokenAttribute::Morphology;
+        let unannotated = doc("ab");
+        let missing = |result: Result<Vec<usize>>| matches!(result, Err(Error::MissingAnnotation(found)) if found == name);
+        let repetitions = [
+            Repetition::Once,
+            Repetition::Optional,
+            Repetition::Negated,
+            Repetition::OneOrMore,
+            Repetition::ZeroOrMore,
+        ];
+        for repetition in repetitions {
+            for expected in [value, ""] {
+                let equals = Equals {
+                    value: expected.into(),
+                };
+                let matcher = one_token(attribute, equals, repetition);
+                let label = format!("{attribute:?} {repetition:?} {expected:?}");
+                assert!(missing(starts(&matcher, &unannotated)), "{label}");
+            }
+        }
+        let cases: [(crate::Predicate, &[usize]); 6] = [
+            // A one-value superset compiles like equality but never requires the annotation.
+            (
+                IsSuperset {
+                    values: values(&[value]),
+                },
+                &[],
+            ),
+            (
+                In {
+                    values: values(&[value]),
+                },
+                &[],
+            ),
+            (
+                NotIn {
+                    values: values(&[value]),
+                },
+                &[0, 1],
+            ),
+            (
+                IsSubset {
+                    values: values(&[value]),
+                },
+                if is_morph { &[0, 1] } else { &[] },
+            ),
+            (IsSuperset { values: Vec::new() }, &[0, 1]),
+            (
+                Intersects {
+                    values: values(&[value]),
+                },
+                &[],
+            ),
+        ];
+        for (predicate, expected) in cases {
+            let label = format!("{attribute:?} {predicate:?}");
+            let matcher = one_token(attribute, predicate, Repetition::Once);
+            assert_eq!(starts(&matcher, &unannotated).unwrap(), expected, "{label}");
+        }
+        // A zero-count item is discarded, so it requires no annotation; the following
+        // unconstrained item keeps the pattern nonempty, so validation still runs.
+        let mut matcher = TokenMatcher::new();
+        let zero = TokenPatternItem {
+            constraints: vec![TokenConstraint {
+                attribute,
+                predicate: Equals {
+                    value: value.into(),
+                },
+            }],
+            repetition: Repetition::Range {
+                min: 0,
+                max: Some(0),
+            },
+        };
+        let any = TokenPatternItem {
+            constraints: Vec::new(),
+            repetition: Repetition::Once,
+        };
+        let tokens = vec![zero, any];
+        matcher.add("r", vec![TokenPattern { tokens }]).unwrap();
+        assert_eq!(starts(&matcher, &unannotated).unwrap(), [0, 1]);
+
+        let mut empty = doc("ab");
+        for token in &mut empty.tokens {
+            set_annotation(token, attribute, Some(""));
+        }
+        let matcher = one_token(attribute, Equals { value: "_".into() }, Repetition::Once);
+        if is_morph {
+            assert_eq!(starts(&matcher, &empty).unwrap(), [0, 1]);
+        } else {
+            assert!(missing(starts(&matcher, &empty)));
+        }
+    }
+    // An empty document needs no annotation, as spaCy's `has_annotation` is true for it.
+    let matcher = one_token(
+        crate::TokenAttribute::Lemma,
+        Equals { value: "x".into() },
+        Repetition::Once,
+    );
+    assert!(starts(&matcher, &doc("")).unwrap().is_empty());
+}
+// The annotation check must not be skipped because a membership condition on the same
+// attribute came first; spaCy 3.8.14 raises E155 for this pattern on an unannotated document.
+#[test]
+fn equality_after_membership_on_the_same_attribute_still_requires_annotation() {
+    let lemma = |predicate| TokenConstraint {
+        attribute: crate::TokenAttribute::Lemma,
+        predicate,
+    };
+    let mut matcher = TokenMatcher::new();
+    let item = |predicate| TokenPatternItem {
+        constraints: vec![lemma(predicate)],
+        repetition: Repetition::Once,
+    };
+    matcher
+        .add(
+            "r",
+            vec![TokenPattern {
+                tokens: vec![
+                    item(crate::Predicate::NotIn {
+                        values: values(&["y"]),
+                    }),
+                    item(crate::Predicate::Equals { value: "x".into() }),
+                ],
+            }],
+        )
+        .unwrap();
+    assert!(matches!(
+        starts(&matcher, &doc("ab")),
+        Err(Error::MissingAnnotation("lemma"))
+    ));
+}
+
+// spaCy 3.8.14 still raises E155 here, because its matcher remembers the attributes of removed
+// rules. SpaRs checks the current rules only, an accepted difference in
+// docs/SPACY_DIFFERENCES.md.
+#[test]
+fn removed_rules_do_not_require_annotations() {
+    let mut matcher = one_token(
+        crate::TokenAttribute::Lemma,
+        crate::Predicate::Equals { value: "x".into() },
+        Repetition::Once,
+    );
+    matcher
+        .add("text", vec![pattern(&[Repetition::Once])])
+        .unwrap();
+    assert!(starts(&matcher, &doc("ab")).is_err());
+    matcher.remove("r").unwrap();
+    assert_eq!(starts(&matcher, &doc("ab")).unwrap(), [0, 1]);
+}
+
+// spaCy 3.8.14 checks the attributes in a fixed order, tag, POS, morphology, lemma and
+// dependency label, and names the first one missing, whatever the pattern order.
+#[test]
+fn missing_annotations_are_reported_in_spacy_order() {
+    use crate::TokenAttribute::*;
+    let item = |attribute| TokenPatternItem {
+        constraints: vec![TokenConstraint {
+            attribute,
+            predicate: crate::Predicate::Equals { value: "x".into() },
+        }],
+        repetition: Repetition::Once,
+    };
+    let mut matcher = TokenMatcher::new();
+    let tokens = [Dep, Lemma, Morphology, Pos, Tag].map(item).to_vec();
+    matcher.add("r", vec![TokenPattern { tokens }]).unwrap();
+    let mut document = doc("ab");
+    for (attribute, name) in [
+        (Tag, "tag"),
+        (Pos, "POS"),
+        (Morphology, "morphology"),
+        (Lemma, "lemma"),
+        (Dep, "dependency label"),
+    ] {
+        assert!(matches!(
+            starts(&matcher, &document),
+            Err(Error::MissingAnnotation(found)) if found == name
+        ));
+        let value = match attribute {
+            Pos => "NOUN",
+            Morphology => "Number=Sing",
+            _ => "x",
+        };
+        set_annotation(&mut document.tokens[0], attribute, Some(value));
+    }
+    assert!(starts(&matcher, &document).is_ok());
+}

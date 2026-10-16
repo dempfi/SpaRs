@@ -189,9 +189,14 @@ impl TokenMatcher {
             .map_err(|error| errors::BindingError::from(error).into_napi(env))
     }
     /// All matches on Node's worker pool, overlapping ones included, each rule, start and end once,
-    /// in spaCy `Matcher` order rather than sorted by `start`. Rejects with `SPARS_INFERENCE` when a
-    /// condition's annotation is null on any document token, for example `pos` before
-    /// `AttributeRuler`, and with `SPARS_BUSY` or `SPARS_INPUT_LIMIT` under `configureExecution` and
+    /// in spaCy `Matcher` order rather than sorted by `start`. Rejects with `SPARS_INFERENCE` when an
+    /// `equals` condition on `lemma`, `pos`, `tag`, `dep` or `morphology` meets a nonempty document
+    /// in which no token has that annotation, for example `pos` before `AttributeRuler`, like
+    /// spaCy's error E155. `''` counts as missing except for `morphology`. Other predicates never
+    /// require the annotation, and a token without it compares as `''` (missing `morphology` has
+    /// its own rules; see the Token Matcher guide). Rejects with `SPARS_UNSUPPORTED` when a
+    /// condition compares `morphology` and the document's morphology is not in spaCy's canonical
+    /// order, and with `SPARS_BUSY` or `SPARS_INPUT_LIMIT` under `configureExecution` and
     /// `configureInputLimits`.
     #[napi(strict, ts_return_type = "Promise<Array<TokenMatch>>")]
     pub fn find_matches(&self, doc: &NativeDocument) -> AsyncTask<TokenMatchTask> {

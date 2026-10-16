@@ -193,6 +193,13 @@ pub(crate) struct CompiledConstraint {
     // keeps the per-token comparison compiled as for the other predicates; extra
     // variants measurably slowed every text comparison.
     subset: bool,
+    // Set for a direct `Equals`, the only condition for which spaCy's `Matcher` requires a
+    // token with the annotation (error E155); one-value set predicates also compile to
+    // `CompiledPredicate::Equals` but never require it.
+    requires_annotation: bool,
+    // The result for a token without the annotation, fixed at compilation; see
+    // `missing_result`. Unannotated documents check it once per token and constraint.
+    missing: bool,
     predicate: CompiledPredicate,
 }
 
@@ -312,7 +319,7 @@ pub(crate) struct CompiledConditions {
 
 // Pattern items are scanned for every token; keep them two per 64-byte cache line.
 const _: () = assert!(std::mem::size_of::<CompiledConditions>() == 32);
-// Constraints are also scanned per token; the subset flag fits in existing padding.
+// Constraints are also scanned per token; the flags fit in existing padding.
 const _: () = assert!(std::mem::size_of::<CompiledConstraint>() == 64);
 
 /// Compile one item's conditions. Its `LENGTH` checks are appended to the pattern's
@@ -581,9 +588,12 @@ impl TokenConstraint {
                 }
             }
         };
+        let missing = missing_result(self.attribute, subset, &predicate);
         Ok(CompiledConstraint {
             attribute: self.attribute,
             subset,
+            requires_annotation: matches!(self.predicate, Predicate::Equals { .. }),
+            missing,
             predicate,
         })
     }
@@ -617,6 +627,7 @@ impl TextAttribute {
 }
 
 impl CompiledConstraint {
+    #[cfg(test)]
     pub(crate) fn attribute(&self) -> TokenAttribute {
         self.attribute
     }
@@ -642,13 +653,22 @@ impl CompiledConstraint {
             .chain(set.into_iter().flatten().map(String::as_str));
         Some((attribute, values))
     }
-    pub(crate) fn validate_document(&self, doc: &Doc) -> Result<()> {
-        // Text-derived attributes are always available and need no document scan.
-        if matches!(
-            self.attribute,
-            TokenAttribute::Text | TokenAttribute::Lower | TokenAttribute::Norm
-        ) || self.attribute.needs_lexicon()
-        {
+    /// Document morphology is compared as stored, so a morphology condition needs every
+    /// present value in spaCy's canonical form. The result depends only on the attribute.
+    fn validate_format(&self, doc: &Doc) -> Result<()> {
+        if self.attribute == TokenAttribute::Morphology {
+            for value in doc.tokens().iter().filter_map(|t| t.morphology.as_deref()) {
+                validate_canonical_morph(value)?;
+            }
+        }
+        Ok(())
+    }
+    /// spaCy's `Matcher` check before matching (error E155): a direct `Equals` on lemma, POS,
+    /// tag, dependency label or morphology needs at least one token with that annotation, as
+    /// `Doc.has_annotation` tests it. Other tokens compare as missing; see `missing_result`.
+    /// The result depends only on the attribute.
+    fn validate_presence(&self, doc: &Doc) -> Result<()> {
+        if !self.requires_annotation || doc.tokens().is_empty() {
             return Ok(());
         }
         // Check presence directly; the per-check value lookup is not needed here.
@@ -658,50 +678,60 @@ impl CompiledConstraint {
             TokenAttribute::Tag => (|t| t.tag.as_deref(), "tag"),
             TokenAttribute::Dep => (|t| t.dep.as_deref(), "dependency label"),
             TokenAttribute::Morphology => (|t| t.morphology.as_deref(), "morphology"),
+            // Text-derived attributes are always available.
             _ => return Ok(()),
         };
-        for token in doc.tokens() {
-            let value = field(token).ok_or(Error::MissingAnnotation(name))?;
-            if self.attribute == TokenAttribute::Morphology {
-                validate_canonical_morph(value)?;
-            }
+        // spaCy stores an empty lemma, POS, tag or label as its unset value, while the
+        // empty morphology analysis `_` is set. An empty document counts as annotated.
+        let is_morph = self.attribute == TokenAttribute::Morphology;
+        let annotated =
+            |token: &crate::Token| field(token).is_some_and(|v| is_morph || !v.is_empty());
+        if doc.tokens().iter().any(annotated) {
+            Ok(())
+        } else {
+            Err(Error::MissingAnnotation(name))
         }
-        Ok(())
+    }
+    /// Both document checks, for tests of a single constraint.
+    #[cfg(test)]
+    pub(crate) fn validate_document(&self, doc: &Doc) -> Result<()> {
+        self.validate_format(doc)?;
+        self.validate_presence(doc)
     }
     fn value<'a>(
         &self,
         token: TokenView<'a>,
         values: Option<&'a TokenValues<'a>>,
-    ) -> Result<Cow<'a, str>> {
+    ) -> Result<Option<Cow<'a, str>>> {
         let t = token.annotations();
-        let (value, name) = match self.attribute {
-            TokenAttribute::Text => return Ok(Cow::Borrowed(token.text())),
+        let value = match self.attribute {
+            TokenAttribute::Text => return Ok(Some(Cow::Borrowed(token.text()))),
             TokenAttribute::Lower => {
                 let cached = values.and_then(|values| values.lower.get(token.index().0));
-                return Ok(match cached {
+                return Ok(Some(match cached {
                     Some(value) => Cow::Borrowed(value.as_ref()),
                     None => lower(token.text()),
-                });
+                }));
             }
-            TokenAttribute::Norm => return Ok(Cow::Borrowed(&t.norm)),
-            TokenAttribute::Lemma => (t.lemma.as_deref(), "lemma"),
-            TokenAttribute::Pos => (t.pos.as_deref(), "POS"),
-            TokenAttribute::Tag => (t.tag.as_deref(), "tag"),
-            TokenAttribute::Dep => (t.dep.as_deref(), "dependency label"),
-            TokenAttribute::Morphology => (t.morphology.as_deref(), "morphology"),
+            TokenAttribute::Norm => return Ok(Some(Cow::Borrowed(&t.norm))),
+            TokenAttribute::Lemma => t.lemma.as_deref(),
+            TokenAttribute::Pos => t.pos.as_deref(),
+            TokenAttribute::Tag => t.tag.as_deref(),
+            TokenAttribute::Dep => t.dep.as_deref(),
+            TokenAttribute::Morphology => t.morphology.as_deref(),
             // Flags and LENGTH compile into `LexicalTest`, never into string constraints.
             _ => return Err(no_string_value()),
         };
-        value
-            .map(Cow::Borrowed)
-            .ok_or(Error::MissingAnnotation(name))
+        Ok(value.map(Cow::Borrowed))
     }
     pub(crate) fn matches<'a>(
         &self,
         token: TokenView<'a>,
         values: &'a TokenValues<'a>,
     ) -> Result<bool> {
-        let value = self.value(token, Some(values))?;
+        let Some(value) = self.value(token, Some(values))? else {
+            return Ok(self.missing);
+        };
         let value = value.as_ref();
         let feature = |wanted: &String| -> bool {
             let Some((key, val)) = wanted.split_once('=') else {
@@ -728,6 +758,61 @@ impl CompiledConstraint {
             CompiledPredicate::Superset(expected) => expected.iter().all(feature),
             CompiledPredicate::Intersects(expected) => expected.iter().any(feature),
         })
+    }
+}
+
+/// The document checks that precede matching, for every constraint of a matcher's patterns.
+/// Morphology format errors come first; then, like spaCy's `Matcher.__call__`, a missing
+/// annotation required by an `Equals` condition is reported for the first attribute in
+/// spaCy's order: tag, POS, morphology, lemma, dependency label. Returns whether any
+/// constraint compares `Lower`, which needs per-call lowercase text.
+// spaCy keeps requiring annotations compared by `Equals` conditions of removed rules; SpaRs
+// checks the current patterns only, an accepted difference in docs/SPACY_DIFFERENCES.md.
+pub(crate) fn validate_constraints<'c>(
+    constraints: impl IntoIterator<Item = &'c CompiledConstraint>,
+    doc: &Doc,
+) -> Result<bool> {
+    const ORDER: [TokenAttribute; 5] = [
+        TokenAttribute::Tag,
+        TokenAttribute::Pos,
+        TokenAttribute::Morphology,
+        TokenAttribute::Lemma,
+        TokenAttribute::Dep,
+    ];
+    let mut required: [Option<&CompiledConstraint>; 5] = [None; 5];
+    let (mut lower, mut morphology_checked) = (false, false);
+    for constraint in constraints {
+        lower |= constraint.attribute == TokenAttribute::Lower;
+        if constraint.attribute == TokenAttribute::Morphology && !morphology_checked {
+            morphology_checked = true;
+            constraint.validate_format(doc)?;
+        }
+        // Membership conditions on the same attribute must not hide an `Equals`.
+        if constraint.requires_annotation {
+            if let Some(slot) = ORDER.iter().position(|a| *a == constraint.attribute) {
+                required[slot].get_or_insert(constraint);
+            }
+        }
+    }
+    for constraint in required.into_iter().flatten() {
+        constraint.validate_presence(doc)?;
+    }
+    Ok(lower)
+}
+
+/// The result for a token without the annotation, which spaCy stores as its unset value and
+/// compares as the empty string. Missing morphology is the unset analysis: it equals only `""`,
+/// and unlike the empty analysis `_` it is never a member of a normalized `In` or `NotIn` list.
+/// As a feature set it is empty.
+fn missing_result(attribute: TokenAttribute, subset: bool, predicate: &CompiledPredicate) -> bool {
+    let is_morph = attribute == TokenAttribute::Morphology;
+    match predicate {
+        CompiledPredicate::Equals(expected) => expected.is_empty(),
+        CompiledPredicate::In(expected) => !is_morph && expected.contains(""),
+        CompiledPredicate::NotIn(expected) => is_morph || !expected.contains(""),
+        CompiledPredicate::Superset(_) if subset => true,
+        CompiledPredicate::Superset(expected) => expected.is_empty(),
+        CompiledPredicate::Intersects(_) => false,
     }
 }
 

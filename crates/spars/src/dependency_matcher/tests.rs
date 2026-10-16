@@ -340,3 +340,85 @@ fn lexical_flags_require_a_lexicon() {
     ));
     assert!(matcher.is_empty());
 }
+// spaCy 3.8.14's DependencyMatcher checks node conditions with its token `Matcher`: a
+// direct-equality condition needs one token with the annotation, a missing value compares as
+// the empty string, and membership conditions need no annotated token.
+#[test]
+fn partly_annotated_documents_match_like_spacy() {
+    let matches = |document: &Doc, predicate: Predicate| -> Result<Vec<Vec<usize>>> {
+        let mut matcher = DependencyMatcher::new();
+        let node = DependencyNode {
+            id: "a".into(),
+            link: None,
+            constraints: vec![TokenConstraint {
+                attribute: TokenAttribute::Lemma,
+                predicate,
+            }],
+        };
+        let nodes = vec![node];
+        matcher.add("r", vec![DependencyPattern { nodes }]).unwrap();
+        Ok(matcher
+            .find_matches(document)?
+            .iter()
+            .map(|m| m.tokens.iter().map(|i| i.0).collect())
+            .collect())
+    };
+    let equals = || Predicate::Equals { value: "x".into() };
+    let not_in = || Predicate::NotIn {
+        values: vec!["x".into()],
+    };
+    let mut partial = doc(&[0, 0, 0]);
+    partial.tokens[0].lemma = Some("x".into());
+    assert_eq!(matches(&partial, equals()).unwrap(), [vec![0]]);
+    assert_eq!(matches(&partial, not_in()).unwrap(), [vec![1], vec![2]]);
+    let unannotated = doc(&[0, 0]);
+    assert!(matches!(
+        matches(&unannotated, equals()),
+        Err(Error::MissingAnnotation("lemma"))
+    ));
+    assert_eq!(matches(&unannotated, not_in()).unwrap(), [vec![0], vec![1]]);
+    // A membership condition on the same attribute, here on the root node, does not skip
+    // the equality check on its child; spaCy 3.8.14 raises E155 for this pattern.
+    let mut matcher = DependencyMatcher::new();
+    let lemma = |predicate| {
+        vec![TokenConstraint {
+            attribute: TokenAttribute::Lemma,
+            predicate,
+        }]
+    };
+    let mut nodes = pattern(Relation::Child).nodes;
+    nodes[0].constraints = lemma(not_in());
+    nodes[1].constraints = lemma(equals());
+    matcher.add("r", vec![DependencyPattern { nodes }]).unwrap();
+    assert!(matches!(
+        matcher.find_matches(&unannotated),
+        Err(Error::MissingAnnotation("lemma"))
+    ));
+}
+// spaCy 3.8.14 still raises E155 after the lemma rule is removed, because its internal
+// matcher remembers removed attributes; SpaRs checks the current rules only, an accepted
+// difference in docs/SPACY_DIFFERENCES.md.
+#[test]
+fn removed_rules_do_not_require_annotations() {
+    let mut matcher = DependencyMatcher::new();
+    let lemma = DependencyNode {
+        id: "a".into(),
+        link: None,
+        constraints: vec![TokenConstraint {
+            attribute: TokenAttribute::Lemma,
+            predicate: Predicate::Equals { value: "x".into() },
+        }],
+    };
+    let nodes = vec![lemma];
+    matcher
+        .add("lemma", vec![DependencyPattern { nodes }])
+        .unwrap();
+    matcher.add("any", vec![pattern(Relation::Child)]).unwrap();
+    let unannotated = doc(&[0, 0]);
+    assert!(matches!(
+        matcher.find_matches(&unannotated),
+        Err(Error::MissingAnnotation("lemma"))
+    ));
+    matcher.remove("lemma").unwrap();
+    assert_eq!(matcher.find_matches(&unannotated).unwrap().len(), 1);
+}

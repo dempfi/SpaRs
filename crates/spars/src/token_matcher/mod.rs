@@ -174,7 +174,18 @@ impl TokenMatcher {
         }
         Ok(())
     }
-    /// Return overlapping matches in the reference state-machine emission order.
+    /// Return every match, overlapping ones included, in spaCy `Matcher` order rather than
+    /// sorted by start. A matcher without rules returns no matches and no error.
+    ///
+    /// Returns [`Error::MissingAnnotation`] when an `Equals` condition compares lemma, POS, tag,
+    /// dependency label or morphology and no token of a nonempty `doc` has that annotation,
+    /// like spaCy's error E155; with several such attributes it names the first missing one in
+    /// spaCy's order: tag, POS, morphology, lemma, dependency label. An empty lemma, POS, tag or
+    /// label counts as missing; empty morphology counts as present. Other predicates never
+    /// require the annotation, and a token without it compares as the empty string (see the
+    /// Token Matcher guide for missing morphology). Returns [`Error::Unsupported`] when any
+    /// condition compares morphology and a token's morphology is not in spaCy's canonical
+    /// `Field=Value|...` order.
     pub fn find_matches(&self, doc: &Doc) -> Result<Vec<TokenMatch>> {
         engine::find(
             &self.compiled,

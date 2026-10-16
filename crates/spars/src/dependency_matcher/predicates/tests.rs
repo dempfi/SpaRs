@@ -993,22 +993,20 @@ fn malformed_set_conditions_are_rejected() {
     }
 }
 #[test]
-fn set_predicates_still_require_their_annotation() {
-    // Even an always-true `IsSuperset []` validates that the annotation exists.
-    for (attribute, name) in [
-        (TokenAttribute::Pos, "POS"),
-        (TokenAttribute::Lemma, "lemma"),
-    ] {
-        let constraint = TokenConstraint {
-            attribute,
-            predicate: Predicate::IsSuperset { values: vec![] },
+fn set_predicates_do_not_require_their_annotation() {
+    // spaCy 3.8.14 raises E155 only for direct equality: on a document without lemmas or POS,
+    // `IS_SUPERSET: []` matches every token. A one-value list compiles like equality but
+    // also never requires the annotation. `doc()` has neither annotation.
+    for attribute in [TokenAttribute::Pos, TokenAttribute::Lemma] {
+        for values in [vec![], vec!["x".to_owned()]] {
+            let constraint = TokenConstraint {
+                attribute,
+                predicate: Predicate::IsSuperset { values },
+            }
+            .compile()
+            .unwrap();
+            constraint.validate_document(&doc()).unwrap();
         }
-        .compile()
-        .unwrap();
-        assert!(matches!(
-            constraint.validate_document(&doc()),
-            Err(Error::MissingAnnotation(missing)) if missing == name
-        ));
     }
 }
 #[test]

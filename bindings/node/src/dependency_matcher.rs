@@ -234,8 +234,12 @@ impl DependencyMatcher {
     }
 
     /// Matches on Node's worker pool, grouped by rule in registration order, then by pattern in
-    /// addition order. A matcher with rules needs a parsed document: missing or cyclic heads, or a
-    /// condition whose annotation is null on any token, reject with `SPARS_INFERENCE`. Rejects with
+    /// addition order. A matcher with rules needs a parsed document: missing, out-of-range or cyclic
+    /// heads reject with `SPARS_INFERENCE`. Conditions fail as in `TokenMatcher.findMatches`:
+    /// `SPARS_INFERENCE` when an `equals` condition on `lemma`, `pos`, `tag`, `dep` or `morphology`
+    /// meets a nonempty document in which no token has that annotation (`''` counts as missing
+    /// except for `morphology`), like spaCy's error E155, while tokens without it compare as `''`;
+    /// `SPARS_UNSUPPORTED` when a condition compares noncanonical `morphology`. Rejects with
     /// `SPARS_BUSY` or `SPARS_INPUT_LIMIT` under `configureExecution` and `configureInputLimits`.
     #[napi(strict, ts_return_type = "Promise<Array<DependencyMatch>>")]
     pub fn find_matches(&self, document: &NativeDocument) -> AsyncTask<DependencyMatchTask> {
