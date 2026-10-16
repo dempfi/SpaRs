@@ -2,8 +2,10 @@ use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 mod entities;
+mod span_groups;
 mod traversal;
 pub use entities::{EntityDefault, EntityUpdate, TokenRange};
+pub use span_groups::{SpanGroup, SpanGroupAttrs, SpanGroups};
 pub use traversal::{Ancestors, Children, DependencyError, Subtree};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ByteOffset(pub usize);
@@ -85,9 +87,9 @@ impl Token {
     }
 }
 /// A half-open token range `start..end` with a label. In a [`Doc`] it is an entity, a sentence
-/// (empty label) or a noun chunk (`"NP"`). Code outside this crate cannot build a `Span` with a
-/// struct literal; build one for [`EntityUpdate::entities`] with [`Span::new`], then assign public
-/// fields such as `id`.
+/// (empty label), a noun chunk (`"NP"`) or a member of a [`SpanGroup`]; span group members may be
+/// empty (`start == end`) and have any label. Code outside this crate cannot build a `Span` with a
+/// struct literal; build one with [`Span::new`], then assign public fields such as `id`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Span {
@@ -95,7 +97,8 @@ pub struct Span {
     pub end: TokenIndex,
     pub label: String,
     /// spaCy's `Span.id_`. In a [`Doc`], `None` means no ID, an entity's ID is its first token's
-    /// [`Token::entity_id`], and sentences and noun chunks never have one. In an
+    /// [`Token::entity_id`], sentences and noun chunks never have one, and a span group member may
+    /// have any non-empty ID ([`Doc::set_span_group`] stores `Some("")` as `None`). In an
     /// [`EntityUpdate`], `None` or an empty ID leaves each token's current ID in place rather than
     /// clearing it, so the resulting entity can still report an earlier ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -123,6 +126,8 @@ pub struct Doc {
     pub(crate) noun_chunks: Option<Vec<Span>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) tensor: Vec<Vec<f32>>,
+    #[serde(skip_serializing_if = "SpanGroups::is_empty")]
+    pub(crate) span_groups: SpanGroups,
     // Public traversal begins after pipeline writes finish. Any future mutation
     // of dependency heads must invalidate this cache before exposing the document.
     #[serde(skip)]
@@ -137,17 +142,19 @@ impl PartialEq for Doc {
             && self.sentences == other.sentences
             && self.noun_chunks == other.noun_chunks
             && self.tensor == other.tensor
+            && self.span_groups == other.span_groups
     }
 }
 impl Doc {
     pub fn text(&self) -> &str {
         &self.text
     }
-    /// Approximate heap memory owned by the document's text, tokens, spans and contextual
-    /// tensor, in bytes. It counts allocated capacity, not the inline size of `Doc` itself, and
-    /// excludes the dependency traversal index built on first use. It is a lower bound: the
-    /// allocator's per-allocation overhead, significant for short strings, is not counted. Bindings report it to
-    /// garbage-collected runtimes so they can account for native memory.
+    /// Approximate heap memory owned by the document's text, tokens, spans, span groups and
+    /// contextual tensor, in bytes. It counts allocated capacity, not the inline size of `Doc`
+    /// itself, and excludes the dependency traversal index built on first use. It is a lower
+    /// bound: the allocator's per-allocation overhead, significant for short strings, is not
+    /// counted. Bindings report it to garbage-collected runtimes so they can account for native
+    /// memory.
     pub fn estimated_heap_bytes(&self) -> usize {
         fn string(value: &Option<String>) -> usize {
             value.as_ref().map_or(0, String::capacity)
@@ -193,6 +200,7 @@ impl Doc {
             + spans(&self.entities)
             + spans(&self.sentences)
             + spans(&self.noun_chunks)
+            + self.span_groups.heap_bytes()
             + tensor
     }
     pub fn tokens(&self) -> &[Token] {
@@ -259,17 +267,27 @@ impl Doc {
     /// Serialize an immutable document snapshot, preserving unavailable annotations.
     pub fn to_json(&self) -> Result<String> {
         // Each version adds a field older readers would otherwise ignore: v2 contextual vectors,
-        // v3 entity IDs. A snapshot uses the oldest version that holds its data.
-        let version = if self.has_entity_ids() {
+        // v3 entity IDs, v4 span groups. A snapshot uses the oldest version that holds its data.
+        let version = if !self.span_groups.is_empty() {
+            4
+        } else if self.has_entity_ids() {
             3
         } else if !self.tensor.is_empty() {
             2
         } else {
             1
         };
-        Ok(serde_json::to_string(
-            &serde_json::json!({"format_version": version, "document": self}),
-        )?)
+        // Serialized directly rather than through `serde_json::Value`, whose sorted maps would
+        // reorder keys inside span group attribute values.
+        #[derive(Serialize)]
+        struct Snapshot<'a> {
+            format_version: u32,
+            document: &'a Doc,
+        }
+        Ok(serde_json::to_string(&Snapshot {
+            format_version: version,
+            document: self,
+        })?)
     }
     /// Restore a [`Doc::to_json`] snapshot after validating it.
     ///
@@ -300,14 +318,21 @@ impl Doc {
             noun_chunks: Option<Vec<Span>>,
             #[serde(default)]
             tensor: Vec<Vec<f32>>,
+            #[serde(default)]
+            span_groups: SpanGroups,
         }
         let s: Snapshot = serde_json::from_str(json)?;
-        if ![1, 2, 3].contains(&s.format_version) {
+        if !(1..=4).contains(&s.format_version) {
             return Err(Error::Unsupported("document format version".into()));
         }
         if s.format_version == 1 && !s.document.tensor.is_empty() {
             return Err(Error::Unsupported(
                 "contextual vectors require document format v2".into(),
+            ));
+        }
+        if s.format_version < 4 && !s.document.span_groups.is_empty() {
+            return Err(Error::Unsupported(
+                "span groups require document format v4".into(),
             ));
         }
         let version = s.format_version;
@@ -452,6 +477,7 @@ impl Doc {
                 "snapshot entities must be the ones the token IOB tags and types describe".into(),
             ));
         }
+        s.span_groups.check_snapshot(s.tokens.len())?;
         Ok(Self {
             text: s.text,
             tokens: s.tokens,
@@ -459,6 +485,7 @@ impl Doc {
             sentences: s.sentences,
             noun_chunks: s.noun_chunks,
             tensor: s.tensor,
+            span_groups: s.span_groups,
             dependency_index: OnceLock::new(),
         })
     }

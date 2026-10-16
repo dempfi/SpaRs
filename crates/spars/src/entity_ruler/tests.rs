@@ -25,6 +25,7 @@ fn doc(words: &str) -> Doc {
         sentences: None,
         noun_chunks: None,
         tensor: Vec::new(),
+        span_groups: Default::default(),
         dependency_index: OnceLock::new(),
     }
 }

@@ -45,5 +45,6 @@
   "fixtures/phrase-match-lexical-v1.expected.json": "d3e0052dadcd6538d4d5649163d195acd4bbe314be5e31f8987c9f48db6cef51",
   "fixtures/entity-updates-v1.expected.json": "08334306c95a3c0d0e7f1ad5218663516c9fd0e7eab663cf1f377d8844b64c88",
   "fixtures/entity-ids-v1.expected.json": "6ee16502e5cdcd3f609064cca9654448c3d21aa8532aed95b3bf913d91f81e07",
-  "fixtures/entity-ruler-v1.expected.json": "7b839ec4e0ca4e498cc5bd6b3b1f5ad82faa4589fdf972d417bc6afd57e67350"
+  "fixtures/entity-ruler-v1.expected.json": "7b839ec4e0ca4e498cc5bd6b3b1f5ad82faa4589fdf972d417bc6afd57e67350",
+  "fixtures/span-groups-v1.expected.json": "7ad9c0f2b70764cc570fa3023582e6b78f890fd6c408f9bd2ea5e94c2af53f7e"
 }

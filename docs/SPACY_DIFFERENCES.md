@@ -1,6 +1,6 @@
 # Accepted differences from spaCy
 
-SpaRs follows spaCy 3.8.14 by default, and a behavior that differs from it is normally a compatibility gap listed in [the compatibility inventory](COMPATIBILITY.md). This file lists the differences that are accepted as SpaRs's intended behavior instead. Each one exists because spaCy's behavior depends on Python internals that are impractical to emulate, is an upstream bug, leaves an object partly changed after an error, or fails later than the setting that causes the failure, or depends on internal state left behind by rules that were removed. The reference fixtures contain no case whose result these differences change; the unit tests named below check SpaRs's behavior.
+SpaRs follows spaCy 3.8.14 by default, and a behavior that differs from it is normally a compatibility gap listed in [the compatibility inventory](COMPATIBILITY.md). This file lists the differences that are accepted as SpaRs's intended behavior instead. Each one exists because spaCy's behavior depends on Python internals that are impractical to emulate, is an upstream bug, leaves an object partly changed after an error, fails later than the setting that causes the failure, depends on internal state left behind by rules that were removed, relies on Python object identity or values that native snapshots cannot store, is a limitation of spaCy's offset-based copying or byte format, or concerns data that SpaRs does not store. The reference fixtures contain no case whose result these differences change; the tests named below check SpaRs's behavior.
 
 Each entry gives spaCy's behavior, SpaRs's behavior, the reason, and the effect on callers.
 
@@ -91,3 +91,90 @@ matcher(nlp("a b"))  # raises ValueError [E155], although no rule compares LEMMA
 ```
 
 The recorded set is `Matcher._seen_attrs` in `spacy/matcher/matcher.pyx`: `add` inserts into it and `remove` does not change it.
+
+## Span groups
+
+These apply to Rust [span groups](SPAN_GROUPS.md). Unit tests are in `crates/spars/src/document/span_groups/tests.rs` and replay and snapshot tests in `crates/spars/tests/span_groups.rs`; run them with `cargo test --release --offline -p spars-nlp --lib span_groups` and `cargo test --release --offline -p spars-nlp --test span_groups`.
+
+### Deleting a span by index
+
+- **spaCy:** `del group[i]` erases the span at position `i - 1` after normalizing a negative index, so `del group[1]` removes the first span, `del group[-1]` removes the second-to-last, and `del group[0]` erases the position before the first span, which is undefined behavior in C++. This is a bug in spaCy 3.8.14 (`SpanGroup.__delitem__` in `spacy/tokens/span_group.pyx`), and the code is unchanged on spaCy's `master` branch at commit `c2dabfce56ad` (2026-09-30). spaCy's own `test_span_doc_delitem` passes despite it, because it checks only the length and the spans from index `i` onward, which are the same whichever of the two spans was removed. The [reproduction](#reproducing-the-span-deletion-bug) below shows it.
+- **SpaRs:** a group's spans are a `Vec`, so `group.spans.remove(i)` removes the span at index `i` and panics for an index out of range, as Rust's `Vec::remove` does.
+- **Reason:** the documented purpose of `del group[i]` is to delete the span at index `i`, and the upstream behavior cannot be reproduced safely for index 0.
+- **Effect:** code that deletes spans by index removes a different span than spaCy 3.8.14 does. The fixture contains no deletion by index.
+- **Tests:** none; Rust's `Vec::remove` defines the behavior.
+
+### Groups are values
+
+- **spaCy:** `doc.spans[key]` returns the stored `SpanGroup` object, so appending to it or replacing its spans changes the document directly, and assigning one group object to two keys shares it between them.
+- **SpaRs:** `Doc::span_groups` returns groups by shared reference (`&SpanGroups`), so they cannot be edited in place. To change one, callers clone it, edit the copy and store it with `Doc::set_span_group`, and each key holds its own group.
+- **Reason:** storing through one checked method lets the document validate every span when it is stored, so the document's groups are always within bounds, and fits Rust ownership without shared mutable state.
+- **Effect:** an edit made to a copy has no effect until it is stored, and storing one group under two keys stores two independent groups.
+- **Tests:** `stored_groups_are_independent_values`; the compiler prevents editing a group through `Doc::span_groups`.
+
+### Copies keep empty spans
+
+- **spaCy:** `Doc.copy()` rebuilds group spans from character offsets and raises `ValueError` E1052 for an empty span (`start == end`) at the start or end of the document, or one that follows a token with trailing whitespace. An empty span after a token without trailing whitespace is copied.
+- **SpaRs:** `Doc::clone` copies every group, including empty spans.
+- **Reason:** spaCy allows empty spans in groups, so a copy that cannot hold them is a limitation of its offset-based copy rather than a rule about groups.
+- **Effect:** some documents whose groups contain empty spans can be copied in SpaRs but not in spaCy.
+- **Tests:** `copies_and_snapshots_keep_empty_spans`.
+
+### Snapshots keep key order
+
+- **spaCy:** `Doc.to_bytes` writes groups with identical content (name, attrs and spans) once, listing their keys, so loading moves a later key next to the first one with the same content.
+- **SpaRs:** native snapshots store every group under its own key, in key order.
+- **Reason:** saving and loading should not change a document, and native snapshots are a separate format from spaCy's bytes.
+- **Effect:** after a round trip, key order in SpaRs matches the saved document; in spaCy it can change.
+- **Tests:** the snapshot round trip after every step of `official_span_group_edits`.
+
+### Attributes are JSON values compared as text
+
+- **spaCy:** `SpanGroup.attrs` is a Python dict that can hold any value, and `Doc.to_bytes` saves values msgpack can encode, such as bytes. Dicts compare regardless of key order, and `1 == 1.0`.
+- **SpaRs:** attrs hold JSON values, given and returned as JSON text, and compare equal only when their keys are in the same order and their values have the same text. `{"a": 1}` and `{"a":1}` differ.
+- **Reason:** keeping each value as the text given preserves key order inside nested objects without an extra dependency, and JSON is what native snapshots can store.
+- **Effect:** non-JSON values cannot be stored, and attrs that are equal as Python dicts can compare unequal in SpaRs. Because SpaRs compares `SpanGroup` and `Doc` by value, this also affects their equality; spaCy compares those objects by identity.
+- **Tests:** `attrs_compare_as_json_text`, `attrs_compare_order_and_text`, `attrs_keep_insertion_order_and_replace_in_place`, `attrs_reject_repeated_keys_and_non_objects`.
+
+### Spans and groups from another document
+
+- **spaCy:** spans and groups belong to a document; building a group from another document's spans, or adding them to a group, raises `ValueError` E855. Assigning another document's `SpanGroup` to `doc.spans[key]` fails an `assert` instead (`AssertionError`, skipped under `python -O`).
+- **SpaRs:** spans are token ranges with no document, so a group built for another document is accepted when its spans fit; `Doc::set_span_group` returns `Error::Bounds` for spans outside the document.
+- **Reason:** SpaRs spans carry no document reference, and bounds are the property the document can check.
+- **Effect:** code that would fail in spaCy for mixing documents succeeds in SpaRs when the spans fit, and the spans then refer to this document's tokens.
+- **Tests:** `groups_built_for_another_document_are_checked_when_stored`.
+
+### No knowledge-base IDs
+
+- **spaCy:** span group members carry a `kb_id`.
+- **SpaRs:** `Span` has no knowledge-base ID, in groups or elsewhere.
+- **Reason:** SpaRs stores no knowledge-base IDs anywhere ([entity editing limits](ENTITIES.md#limits)); adding them would extend `Span` for every use at once.
+- **Effect:** `kb_id` values cannot be stored in span groups.
+- **Tests:** none; `Span` has no such field.
+
+### Extending a group with itself
+
+- **spaCy:** `group.extend(group)` and `group += group` insert a vector's range into the same vector, which is undefined behavior in C++.
+- **SpaRs:** Rust's borrow rules reject `group.extend_group(&group)`; extending with `group.clone()` appends the spans once.
+- **Reason:** undefined behavior cannot be reproduced, and appending a copy matches extending with any other group.
+- **Effect:** code that extends a group with a copy of itself gets each span repeated once.
+- **Tests:** `extend_group_adds_spans_and_missing_attrs`.
+
+## Reproducing the span deletion bug
+
+With spaCy 3.8.14, using a blank English pipeline:
+
+```python
+import spacy
+
+nlp = spacy.blank("en")
+doc = nlp("a b c d")
+doc.spans["g"] = [doc[0:1], doc[1:2], doc[2:3]]
+del doc.spans["g"][1]
+print([s.text for s in doc.spans["g"]])  # ['b', 'c'], expected ['a', 'c']
+doc.spans["g"] = [doc[0:1], doc[1:2], doc[2:3]]
+del doc.spans["g"][-1]
+print([s.text for s in doc.spans["g"]])  # ['a', 'c'], expected ['a', 'b']
+```
+
+The cause is `self.c.erase(self.c.begin() + i - 1)` in `SpanGroup.__delitem__`; erasing `self.c.begin() + i` fixes it.

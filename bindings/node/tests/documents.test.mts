@@ -106,6 +106,31 @@ test('snapshots reject malformed JSON, unsupported versions, offsets, indices an
   assert.equal(doc.toSnapshot(), encoded);
 });
 
+test('snapshots keep and validate span groups written by Rust documents', async () => {
+  const doc = await model.processDocument('New York City', 'Tokenizer');
+  const saved = record(JSON.parse(doc.toSnapshot()));
+  saved.format_version = 4;
+  const groups = [
+    { key: 'places', name: 'gazetteer', attrs: { source: { z: 1, a: [2] } }, spans: [{ start: 0, end: 3, label: 'GPE' }, { start: 1, end: 1, label: '' }] },
+    { key: 'other', name: 'other', spans: [] },
+  ];
+  record(saved.document).span_groups = groups;
+  const serialized = JSON.stringify(saved);
+  const restored = NativeDocument.fromSnapshot(serialized);
+  assert.equal(restored.toSnapshot(), serialized);
+  assert.deepEqual(restored.toObject(), doc.toObject());
+  for (const [version, invalid, code] of [
+    [3, groups, 'SPARS_UNSUPPORTED'],
+    [4, [{ key: 'a', name: 'a', spans: [{ start: 0, end: 4, label: '' }] }], 'SPARS_BOUNDS'],
+    [4, [{ key: 'a', name: 'a', spans: [] }, { key: 'a', name: 'a', spans: [] }], 'SPARS_INVALID_MODEL'],
+  ] as const) {
+    const malformed = record(JSON.parse(serialized));
+    malformed.format_version = version;
+    record(malformed.document).span_groups = invalid;
+    assert.throws(() => NativeDocument.fromSnapshot(JSON.stringify(malformed)), { code });
+  }
+});
+
 test('native processing preserves text validation and code-point limits', async () => {
   await assert.rejects(model.processDocument('\ud800'), { code: 'SPARS_INVALID_TEXT' });
   const local = await loadModel(modelPath);

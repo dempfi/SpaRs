@@ -276,7 +276,7 @@ fn malformed_snapshots_reject_unicode_offsets_indices_and_spans() {
         );
     }
     let mut unsupported = valid.clone();
-    unsupported["format_version"] = json!(4);
+    unsupported["format_version"] = json!(5);
     assert!(matches!(
         Doc::from_json(&unsupported.to_string()),
         Err(Error::Unsupported(_))

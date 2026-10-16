@@ -36,6 +36,7 @@ fn doc() -> Doc {
         sentences: None,
         noun_chunks: None,
         tensor: Vec::new(),
+        span_groups: Default::default(),
         dependency_index: Default::default(),
     }
 }
@@ -181,6 +182,7 @@ fn lower_needs_no_annotations_and_compares_pattern_values_as_written() {
         sentences: None,
         noun_chunks: None,
         tensor: Vec::new(),
+        span_groups: Default::default(),
         dependency_index: Default::default(),
     };
     let check = |predicate: Predicate, index: usize| {
@@ -307,6 +309,7 @@ fn lower_set_values_are_not_lowercased_and_cache_is_filled_only_when_needed() {
         sentences: None,
         noun_chunks: None,
         tensor: Vec::new(),
+        span_groups: Default::default(),
         dependency_index: Default::default(),
     };
     let values = TokenValues::new(
@@ -501,6 +504,7 @@ fn length_counts_code_points_and_compares_like_spacy() {
         sentences: None,
         noun_chunks: None,
         tensor: Vec::new(),
+        span_groups: Default::default(),
         dependency_index: Default::default(),
     };
     let values = TokenValues::new(

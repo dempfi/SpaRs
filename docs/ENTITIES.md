@@ -112,7 +112,7 @@ IDs follow spaCy's rules, including two that can surprise:
 - An entity without an ID, or with an empty one, does not clear IDs. Each of its tokens keeps its current ID, so a relabeled entity keeps its old ID, and a new entity without an ID reports the ID its first token already had. Give the entity an ID to replace it.
 - Outside, missing and blocked tokens keep their IDs. Only `Token::entity_id` shows such an ID; `Doc::entities` never includes those tokens.
 
-In an update, an empty ID means the same as `None`, as in spaCy. Native snapshots use format version 3 when any token or entity has an ID; documents without IDs are still written as version 1 or 2, and older SpaRs versions reject version 3 instead of silently dropping the IDs. `Doc::from_json` rejects an empty ID, an ID on a sentence or noun chunk, and an entity whose ID differs from its first token's, since spaCy cannot represent those; it also checks entities against the tags, as described in [entity annotation in snapshots](#entity-annotation-in-snapshots). Knowledge-base IDs (`kb_id`) are not stored; see [limits](#limits).
+In an update, an empty ID means the same as `None`, as in spaCy. Native snapshots use format version 4 when a document has [span groups](SPAN_GROUPS.md), otherwise version 3 when any token or entity has an ID; documents without IDs or groups are still written as version 1 or 2, and older SpaRs versions reject version 3 or later instead of silently dropping the IDs. `Doc::from_json` rejects an empty ID, an ID on a sentence or noun chunk, and an entity whose ID differs from its first token's, since spaCy cannot represent those; it also checks entities against the tags, as described in [entity annotation in snapshots](#entity-annotation-in-snapshots). Knowledge-base IDs (`kb_id`) are not stored; see [limits](#limits).
 
 ## Ownership and views
 
@@ -127,7 +127,7 @@ These differ from spaCy or are not supported:
 - Knowledge-base IDs (`kb_id`) are not stored. spaCy's `set_ents` copies each entity span's knowledge-base ID to its tokens; SpaRs has no entity linker to produce them, and they have no planned delivery. [Entity IDs](#entity-ids) are stored.
 - spaCy's `Doc.ents` setter, which also accepts `(label, start, end)` tuples and tuples carrying knowledge-base and entity IDs, is not provided; nor is the `ents` argument of spaCy's `Doc` constructor, which takes IOB strings. Use `set_entities` with token intervals.
 - spaCy's `set_ents` edits the document in place; `Doc::with_entities` and the Node binding return a copy, as described above.
-- Span groups (`Doc.spans`), merging or splitting tokens, and other annotation edits are not supported. The [compatibility inventory](COMPATIBILITY.md) tracks them.
+- Merging or splitting tokens is not supported. [Span groups](SPAN_GROUPS.md) are a separate annotation and never change entities. The [compatibility inventory](COMPATIBILITY.md) tracks them.
 
 ## Verification
 
