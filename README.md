@@ -1,5 +1,7 @@
 # SpaRs
 
+[![crates.io](https://img.shields.io/crates/v/spars-nlp.svg)](https://crates.io/crates/spars-nlp) [![docs.rs](https://img.shields.io/docsrs/spars-nlp)](https://docs.rs/spars-nlp) [![npm](https://img.shields.io/npm/v/@spars/node.svg)](https://www.npmjs.com/package/@spars/node) [![CI](https://github.com/tareksanger/SpaRs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tareksanger/SpaRs/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/tareksanger/SpaRs/blob/main/LICENSE) [![MSRV 1.85](https://img.shields.io/badge/MSRV-1.85-orange.svg)](https://github.com/tareksanger/SpaRs/blob/main/crates/spars/Cargo.toml)
+
 > **AI disclosure:** This project is built with AI assistance.
 
 Experimental, standalone Rust NLP library using **official spaCy pretrained weights**, with native Rust tokenization and inference. The Rust crate needs no Python, JavaScript, WASM, subprocess, network client, or build-time model download. Optional [Node.js bindings](https://github.com/tareksanger/SpaRs/blob/main/docs/NODE.md) live in a separate crate. The project is named **SpaRs**, with Cargo package name `spars-nlp` and Rust import name `spars`.
