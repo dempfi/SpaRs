@@ -74,8 +74,8 @@ test('ordered stages distinguish unavailable annotations from empty results', as
     assert.equal(first.entityIob !== null, index >= 5);
     assert.equal(doc.entities !== null, index >= 5);
   }
-  assert.deepEqual(await model.process(''), { text: '', tokens: [], entities: [], sentences: [], nounChunks: [] });
-  assert.deepEqual(await model.process('', 'Tokenizer'), { text: '', tokens: [], entities: null, sentences: null, nounChunks: null });
+  assert.deepEqual(await model.process(''), { text: '', tokens: [], entities: [], sentences: [], nounChunks: [], spanGroups: [] });
+  assert.deepEqual(await model.process('', 'Tokenizer'), { text: '', tokens: [], entities: null, sentences: null, nounChunks: null, spanGroups: [] });
 });
 
 test('repeated, batched and concurrent calls remain independent', async () => {

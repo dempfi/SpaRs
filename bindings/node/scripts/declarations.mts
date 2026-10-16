@@ -77,7 +77,7 @@ const replacements: ReadonlyArray<{ name: string; fields: readonly string[]; rep
   start: import('./units.js').TokenIndex
   end: import('./units.js').TokenIndex
   label: Label
-  /** spaCy's \`Span.id_\`, or \`''\` without one; only entities carry IDs. */
+  /** spaCy's \`Span.id_\`, or \`''\` without one; entities and span group members carry IDs. */
   id: Id
 }` },
   { name: 'RulerPattern', fields: ['label', 'id', 'tokens', 'phrase'], replacement: `/** A pattern as \`EntityRuler.patterns\` lists it, like an entry of spaCy's \`EntityRuler.patterns\`. */
@@ -178,6 +178,35 @@ export interface EntityPhrasePattern extends EntityPatternBase {
 }
 `;
 
+const spanGroupTypes = `
+/** A JSON value: what span group attrs can hold. */
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
+/** A JSON value given as input, which may be read-only, such as a value declared \`as const\`. */
+export type JsonInput = null | boolean | number | string | readonly JsonInput[] | { readonly [key: string]: JsonInput }
+/**
+ * Span group attributes, like spaCy's \`SpanGroup.attrs\`. Keys keep their order, except that JavaScript lists integer-like keys such as \`'1'\` first.
+ * Numbers are JavaScript numbers, so integers beyond \`Number.MAX_SAFE_INTEGER\` in a snapshot lose precision when read.
+ */
+export type SpanGroupAttrs = { [key: string]: JsonValue }
+/** A span group for \`NativeDocument.withSpanGroup\`, like a \`SpanGroup\` assigned to spaCy's \`Doc.spans\`. Unknown string-keyed properties on the group or on any span throw \`InvalidArg\`. */
+export interface SpanGroupInput {
+  /** spaCy's \`SpanGroup.name\`. Omitted or \`null\` uses the key, as when spaCy is given a plain list of spans; \`''\` is kept as an empty name. */
+  name?: string | null
+  /**
+   * spaCy's \`SpanGroup.attrs\`. Omitted, \`null\` or \`{}\` means none, read back as \`{}\`.
+   * Plain JSON only: \`null\`, booleans, finite numbers, strings, arrays without holes, and objects whose prototype is \`Object.prototype\` or \`null\`, with enumerable data properties.
+   * Anything else, such as \`undefined\`, \`NaN\`, a \`Date\`, a getter or a circular reference, throws \`TypeError\`; a string or key with an unpaired surrogate throws \`SPARS_INVALID_TEXT\`.
+   */
+  attrs?: { readonly [key: string]: JsonInput } | null
+  /** Kept in order; they may overlap, repeat or be empty. */
+  spans: SpanInput[]
+}
+`;
+
+export function addSpanGroupTypes(source: string): string {
+  return source.includes('export type SpanGroupAttrs ') ? source : source + spanGroupTypes;
+}
+
 export function addEntityPatternTypes(source: string): string {
   return source.includes('export type EntityPattern ') ? source : source + entityPatternTypes;
 }
@@ -198,6 +227,7 @@ export function addMatcherLoaders(source: string): string {
   const hooks = ['PhraseMatcher', 'TokenMatcher', 'DependencyMatcher'].map(name =>
     `require('./execution.cjs').installMatcher(module.exports.${name}, module.exports.NativeDocument, '${name.replace('Matcher', '').toLowerCase()}');`);
   hooks.push("require('./execution.cjs').installEntityRuler(module.exports.EntityRuler, module.exports.NativeDocument);");
+  hooks.push("require('./execution.cjs').installDocument(module.exports.NativeDocument);");
   for (const hook of hooks) if (!source.includes(hook)) source += `\n${hook}\n`;
   return source;
 }
@@ -208,7 +238,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   for (const name of ['Model', 'NativeDocument', 'NativeToken', 'NativeSpan']) declarations = restrictConstructor(declarations, name);
   for (const { name, fields, replacement } of replacements) declarations = replaceInterface(declarations, name, fields, replacement);
   const vocabulary = readFileSync(new URL('./vocabulary.d.ts', import.meta.url), 'utf8');
-  writeFileSync(path, addVocabularyTypes(addEntityPatternTypes(addExecutionTypes(declarations)), vocabulary));
+  writeFileSync(path, addVocabularyTypes(addSpanGroupTypes(addEntityPatternTypes(addExecutionTypes(declarations))), vocabulary));
   const loader = new URL('../index.js', import.meta.url);
   let source = addExecutionLoader(readFileSync(loader, 'utf8'));
   source = addMatcherLoaders(source);

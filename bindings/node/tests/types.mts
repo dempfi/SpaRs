@@ -3,7 +3,7 @@ import { downloadModel, EntityRuler, loadModel, PhraseMatcher, TokenMatcher } fr
 import type { Document, Token, TokenAnnotations, Span, Stage, NativeDocument, Lexeme, ModelStore, PhraseMatch, TokenMatch, DependencyMatcher, DependencyMatch,
   DependencyLink, DependencyLabel, DependencyPattern, DependencyRelation, EntityIob, EntityLabel, EntityLabels, EntityInput, FineGrainedTag, ModelName,
   PhraseAttribute, SparsError, SparsErrorCode, TokenConstraint, TokenPattern, UniversalPos, EntityMatch, EntityPattern, RulerPattern,
-  EntityRulerOptions } from '../index.js';
+  EntityRulerOptions, JsonInput, JsonValue, SpanGroup, SpanGroupAttrs, SpanGroupInput, SpanGroupKey, SpanInput, SpanLabel } from '../index.js';
 import type { ByteOffset, CodePointOffset, Utf16Offset, TokenIndex } from '../units.js';
 
 type Assert<T extends true> = T;
@@ -11,6 +11,33 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B 
 type Distinct<A, B> = A extends B ? false : true;
 
 export type Contracts = [
+  // Span groups: precise output, typed inputs, and keys and labels that autocomplete known values.
+  Assert<Equal<Document['spanGroups'], SpanGroup[]>>,
+  Assert<Equal<SpanGroup['key'], SpanGroupKey>>,
+  Assert<Equal<SpanGroup['attrs'], SpanGroupAttrs>>,
+  Assert<Equal<SpanGroup['spans'], Span<SpanLabel | ''>[]>>,
+  Assert<Equal<SpanGroupAttrs[string], JsonValue>>,
+  Assert<Equal<SpanGroupInput['spans'], SpanInput[]>>,
+  Assert<Equal<ReturnType<NativeDocument['withSpanGroup']>, NativeDocument>>,
+  Assert<Equal<ReturnType<NativeDocument['withoutSpanGroup']>, NativeDocument>>,
+  Assert<Equal<Parameters<NativeDocument['withSpanGroup']>, [key: SpanGroupKey, group: SpanGroupInput]>>,
+  Assert<Equal<'ruler' extends SpanGroupKey ? true : false, true>>,
+  Assert<Equal<'sc' extends SpanGroupKey ? true : false, true>>,
+  Assert<Equal<'custom' extends SpanGroupKey ? true : false, true>>,
+  Assert<Equal<'PERSON' extends SpanLabel ? true : false, true>>,
+  Assert<Equal<'ANY_LABEL' extends SpanLabel ? true : false, true>>,
+  Assert<Equal<undefined extends SpanGroupAttrs[string] ? true : false, false>>,
+  Assert<Equal<Extract<SpanGroupKey, 'ruler' | 'sc'>, 'ruler' | 'sc'>>,
+  Assert<Equal<Equal<SpanGroupKey, string>, false>>,
+  Assert<Equal<JsonValue, null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }>>,
+  Assert<Equal<Date extends JsonValue ? true : false, false>>,
+  Assert<Equal<bigint extends JsonValue ? true : false, false>>,
+  Assert<Equal<(() => void) extends JsonValue ? true : false, false>>,
+  Assert<Equal<Parameters<NativeDocument['withoutSpanGroup']>, [key: SpanGroupKey]>>,
+  Assert<Equal<SpanGroupInput['name'], string | null | undefined>>,
+  Assert<Equal<SpanGroupInput['attrs'], { readonly [key: string]: JsonInput } | null | undefined>>,
+  Assert<Equal<(readonly [1, 'a']) extends JsonInput ? true : false, true>>,
+  Assert<Equal<Date extends JsonInput ? true : false, false>>,
   Assert<Distinct<typeof Model, new () => Model>>,
   Assert<Equal<Awaited<ReturnType<Model['process']>>, Document>>,
   Assert<Equal<ReturnType<Model['processDocument']>, Promise<NativeDocument>>>,

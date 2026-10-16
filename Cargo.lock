@@ -847,6 +847,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "serde_json",
  "spars-model",
  "spars-nlp",
 ]

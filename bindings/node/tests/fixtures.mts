@@ -84,6 +84,8 @@ function withoutIds(spans: Document['entities']): ReferenceSpan[] | null {
 }
 export function snapshot(doc: Document): ReferenceDocument {
   assert.ok(doc.tokens.every(t => t.entityId === ''));
+  // No pipeline stage writes span groups, as spaCy's official pipelines leave doc.spans empty.
+  assert.deepEqual(doc.spanGroups, []);
   return { text: doc.text, tokens: doc.tokens.map(t => ({ start: t.byteStart, end: t.byteEnd, idx: t.codePointStart,
     whitespace: t.whitespace === ' ', norm: t.norm, tag: t.tag, pos: t.pos, morphology: t.morphology,
     lemma: t.lemma, head: t.head, dep: t.dep, sentence_start: t.sentenceStart, entity_iob: t.entityIob, entity_type: t.entityType })),

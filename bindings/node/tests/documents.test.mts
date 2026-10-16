@@ -118,7 +118,12 @@ test('snapshots keep and validate span groups written by Rust documents', async 
   const serialized = JSON.stringify(saved);
   const restored = NativeDocument.fromSnapshot(serialized);
   assert.equal(restored.toSnapshot(), serialized);
-  assert.deepEqual(restored.toObject(), doc.toObject());
+  assert.deepEqual(restored.toObject(), { ...doc.toObject(), spanGroups: [
+    { key: 'places', name: 'gazetteer', attrs: { source: { z: 1, a: [2] } }, spans: [{ start: 0, end: 3, label: 'GPE', id: '' }, { start: 1, end: 1, label: '', id: '' }] },
+    { key: 'other', name: 'other', attrs: {}, spans: [] },
+  ] });
+  // Attr key order survives, including inside nested objects.
+  assert.deepEqual(Object.keys(restored.toObject().spanGroups[0]?.attrs.source ?? {}), ['z', 'a']);
   for (const [version, invalid, code] of [
     [3, groups, 'SPARS_UNSUPPORTED'],
     [4, [{ key: 'a', name: 'a', spans: [{ start: 0, end: 4, label: '' }] }], 'SPARS_BOUNDS'],

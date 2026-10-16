@@ -1,6 +1,6 @@
 # Span groups
 
-A span group is a named list of spans stored in a document, following spaCy 3.8.14's `Doc.spans` and `SpanGroup`. Unlike entities, the spans in a group may overlap, repeat, or be empty, so groups can hold candidate mentions, alternative analyses, or the output of rules that should not overwrite entities. Span groups are independent of entities, sentences and noun chunks: setting a group does not change any other annotation. This guide uses the Rust API of the `spars-nlp` package, imported as `spars` (see the [README](../README.md)); the Node binding does not expose span groups yet.
+A span group is a named list of spans stored in a document, following spaCy 3.8.14's `Doc.spans` and `SpanGroup`. Unlike entities, the spans in a group may overlap, repeat, or be empty, so groups can hold candidate mentions, alternative analyses, or the output of rules that should not overwrite entities. Span groups are independent of entities, sentences and noun chunks: setting a group does not change any other annotation. This guide uses the Rust API of the `spars-nlp` package, imported as `spars` (see the [README](../README.md)); Node exposes span groups through `NativeDocument.withSpanGroup`, `withoutSpanGroup` and `toObject().spanGroups`, as described in [the Node guide](NODE.md#store-span-groups).
 
 ## Store and read groups
 
@@ -71,12 +71,13 @@ These differences are [accepted](SPACY_DIFFERENCES.md#span-groups) as SpaRs's in
 
 ## Verification
 
-`fixtures/span-groups-v1.expected.json` freezes spaCy 3.8.14 span group states after assigning lists and groups, deleting keys, appending, extending with spans and groups, concatenating, replacing spans by index, and copying documents, including rejected edits. `crates/spars/tests/span_groups.rs` replays every step, compares the keys, names, attrs, spans and `has_overlap` of each group and the rejected edits, checks that a rejected edit changes nothing, and checks a snapshot round trip after every step. `tools/test_span_group_reference.py` regenerates the fixture with spaCy, compares it with the frozen file, and replays every step with plain Python. Run them with:
+`fixtures/span-groups-v1.expected.json` freezes spaCy 3.8.14 span group states after assigning lists and groups, deleting keys, appending, extending with spans and groups, concatenating, replacing spans by index, and copying documents, including rejected edits. `crates/spars/tests/span_groups.rs` replays every step, compares the keys, names, attrs, spans and `has_overlap` of each group and the rejected edits, checks that a rejected edit changes nothing, and checks a snapshot round trip after every step. `bindings/node/tests/span-groups.test.mts` replays every step through the Node binding. `tools/test_span_group_reference.py` regenerates the fixture with spaCy, compares it with the frozen file, and replays every step with plain Python. Run them with:
 
 ```bash
 cargo test --release --offline -p spars-nlp --test span_groups
 cargo test --release --offline -p spars-nlp --lib span_groups
 .venv/bin/python -m unittest discover -s tools -p test_span_group_reference.py
+npm --prefix bindings/node test
 ```
 
-The Python check needs the [reference environment](DEVELOPMENT.md) with `en_core_web_md` 3.8.0 installed.
+The Python check needs the [reference environment](DEVELOPMENT.md) with `en_core_web_md` 3.8.0 installed. The Node suite needs the built binding, as described in [the Node guide](NODE.md); its span group tests need no model.

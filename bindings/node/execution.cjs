@@ -169,7 +169,7 @@ function install(binding) {
     if (typeof text !== 'string') throw new TypeError('Expected a text string');
     validateStage(stage);
     if (inputLimits && text.length > inputLimits.maxTextLength) return tooLarge('Text exceeds maxTextLength (UTF-16 units)');
-    return scheduler.submit(() => process.call(this, text, stage));
+    return scheduler.submit(() => process.call(this, text, stage)).then(parseAttrs);
   };
   const processDocument = prototype.processDocument;
   if (processDocument) prototype.processDocument = function(text, stage) {
@@ -205,7 +205,7 @@ function install(binding) {
       const documents = [];
       for (let offset = 0; offset < snapshot.length; offset += size) {
         const result = await batch.call(this, snapshot.slice(offset, offset + size), stage);
-        for (const doc of result) documents.push(doc);
+        for (const doc of result) documents.push(parseAttrs(doc));
       }
       return documents;
     });
@@ -325,6 +325,93 @@ function installEntityRuler(EntityRuler, NativeDocument) {
   prototype.clear = function() { assertMutable(this); clear.call(this); };
 }
 
+/**
+ * Pass span group attrs to the native code as JSON text, which keeps their key order, and parse them back in
+ * `toObject`. Only plain JSON values are accepted, so nothing is silently dropped or changed by `JSON.stringify`.
+ * @param {typeof import('./index.js').NativeDocument} NativeDocument
+ */
+function installDocument(NativeDocument) {
+  const prototype = NativeDocument.prototype;
+  if (installed.has(prototype)) return;
+  installed.add(prototype);
+  const toObject = prototype.toObject;
+  const withSpanGroup = prototype.withSpanGroup;
+  prototype.toObject = function() { return parseAttrs(toObject.call(this)); };
+  prototype.withSpanGroup = function(key, group) {
+    if (!group || typeof group !== 'object' || Array.isArray(group)) return withSpanGroup.call(this, key, group);
+    /** @type {Record<string, unknown>} */
+    const native = { ...group };
+    // Read attrs once, so a getter cannot return one value to the check and another to stringify.
+    const attrs = native.attrs;
+    if (attrs != null) {
+      checkJson(attrs, 'attrs');
+      native.attrs = JSON.stringify(attrs);
+    }
+    return withSpanGroup.call(this, key, /** @type {import('./index.js').SpanGroupInput} */ (/** @type {unknown} */ (native)));
+  };
+}
+
+/**
+ * Parse the JSON text the native code passes for span group attrs, in place.
+ * @param {import('./index.js').Document} document @returns {import('./index.js').Document}
+ */
+function parseAttrs(document) {
+  for (const group of document.spanGroups) {
+    group.attrs = /** @type {import('./index.js').SpanGroupAttrs} */ (JSON.parse(/** @type {string} */ (/** @type {unknown} */ (group.attrs))));
+  }
+  return document;
+}
+
+/**
+ * Check that a value is plain JSON: null, a boolean, a finite number, a well-formed string, an array without holes, or an
+ * object with the default prototype (or none) and string keys. It walks with an explicit stack, so deeply nested values
+ * get the same errors as shallow ones instead of exhausting the call stack.
+ * @param {unknown} root @param {string} name
+ */
+function checkJson(root, name) {
+  if (root === null || typeof root !== 'object' || Array.isArray(root)) throw new TypeError(`Span group ${name} must be an object`);
+  /** @type {Set<object>} Objects on the path from the root, to detect cycles while allowing shared references. */
+  const ancestors = new Set();
+  /** @type {Array<{ value: unknown, path: () => string } | { leave: object }>} */
+  const stack = [{ value: root, path: () => name }];
+  while (stack.length) {
+    const frame = /** @type {{ value: unknown, path: () => string } | { leave: object }} */ (stack.pop());
+    if ('leave' in frame) { ancestors.delete(frame.leave); continue; }
+    const { value, path } = frame;
+    // Paths are built only when an error is reported.
+    const invalid = (/** @type {string} */ reason) => new TypeError(`Span group ${path()} ${reason}`);
+    if (value === null || typeof value === 'boolean') continue;
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) throw invalid('must not contain NaN or infinite numbers');
+      continue;
+    }
+    if (typeof value === 'string') {
+      if (!value.isWellFormed()) throw Object.assign(new Error(`Span group ${path()} contains an unpaired UTF-16 surrogate`), { code: 'SPARS_INVALID_TEXT' });
+      continue;
+    }
+    if (typeof value !== 'object') throw invalid(`must be JSON, not ${typeof value}`);
+    if (ancestors.has(value)) throw invalid('must not be circular');
+    ancestors.add(value);
+    stack.push({ leave: value });
+    if (Array.isArray(value)) {
+      // A hole reads as undefined, which is rejected like any other non-JSON value.
+      for (let i = value.length - 1; i >= 0; i--) stack.push({ value: value[i], path: () => `${path()}[${i}]` });
+      continue;
+    }
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) throw invalid('must contain only plain objects and arrays');
+    const keys = Reflect.ownKeys(value);
+    for (let i = keys.length - 1; i >= 0; i--) {
+      const key = keys[i];
+      if (typeof key !== 'string') throw invalid('must not have symbol keys');
+      if (!key.isWellFormed()) throw Object.assign(new Error(`Span group ${path()} has a key with an unpaired UTF-16 surrogate`), { code: 'SPARS_INVALID_TEXT' });
+      const descriptor = /** @type {PropertyDescriptor} */ (Object.getOwnPropertyDescriptor(value, key));
+      if (!descriptor.enumerable || !('value' in descriptor)) throw invalid('must contain only enumerable data properties');
+      stack.push({ value: descriptor.value, path: () => `${path()}.${key}` });
+    }
+  }
+}
+
 /** @param {unknown} value @param {string[]} allowed @returns {Record<string, unknown>} */
 function patternRecord(value, allowed) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
@@ -357,4 +444,4 @@ function validatePatterns(value, kind) {
   }
 }
 
-module.exports = { ERROR_CODES, OFFICIAL_MODEL_NAMES, Scheduler, configureExecution, configureInputLimits, install, installEntityRuler, installMatcher, isOfficialModelName, isSparsError };
+module.exports = { ERROR_CODES, OFFICIAL_MODEL_NAMES, Scheduler, configureExecution, configureInputLimits, install, installDocument, installEntityRuler, installMatcher, isOfficialModelName, isSparsError };

@@ -52,9 +52,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `EntityRuler` adds entities from token patterns and phrases like spaCy's `entity_ruler`, after the recognizer or without it, with spaCy's priority, overwrite and entity-ID behavior and a few [documented differences](docs/ENTITY_RULER.md#differences-from-spacy). See [adding entities with rules](docs/ENTITY_RULER.md); Node exposes it as `EntityRuler`.
 
-Rust documents store named [span groups](docs/SPAN_GROUPS.md) like spaCy's `Doc.spans`: ordered lists of spans that may overlap, with names and JSON attributes, kept in snapshots.
+Rust documents store named [span groups](docs/SPAN_GROUPS.md) like spaCy's `Doc.spans`: ordered lists of spans that may overlap, with names and JSON attributes, kept in snapshots; Node exposes them through `withSpanGroup`, `withoutSpanGroup` and `toObject().spanGroups`.
 
-`PhraseMatcher` matches reusable phrase patterns by exact text (`ORTH`/`TEXT`), pinned Unicode lowercase (`LOWER`), token norm (`NORM`), linguistic annotations (`LEMMA`, `POS`, `TAG`, `DEP` and `MORPH`), lexical flags such as `IS_ALPHA`, or `LENGTH`, including ordered overlaps and registration/removal. It accepts existing documents without inference or downloads. See the [PhraseMatcher guide](docs/PHRASE_MATCHER.md). The [Node API](docs/NODE.md) exposes all three native matchers, the EntityRuler, retained document/token/span views, entity editing, traversal, vectors and similarity, lexical queries, snapshots, and offline model-store management.
+`PhraseMatcher` matches reusable phrase patterns by exact text (`ORTH`/`TEXT`), pinned Unicode lowercase (`LOWER`), token norm (`NORM`), linguistic annotations (`LEMMA`, `POS`, `TAG`, `DEP` and `MORPH`), lexical flags such as `IS_ALPHA`, or `LENGTH`, including ordered overlaps and registration/removal. It accepts existing documents without inference or downloads. See the [PhraseMatcher guide](docs/PHRASE_MATCHER.md). The [Node API](docs/NODE.md) exposes all three native matchers, the EntityRuler, retained document/token/span views, entity editing, span groups, traversal, vectors and similarity, lexical queries, snapshots, and offline model-store management.
 
 ## Install a model without Python
 

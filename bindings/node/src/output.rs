@@ -16,6 +16,27 @@ pub struct Document {
     #[napi(ts_type = "Array<Span<'NP', ''>>")]
     /// Null until `AttributeRuler` runs.
     pub noun_chunks: Option<Vec<Span>>,
+    /// Named span groups, like spaCy's `Doc.spans`, in the order their keys were added; replacing
+    /// a group keeps its position. Empty unless set with `NativeDocument.withSpanGroup` or
+    /// restored from a snapshot.
+    pub span_groups: Vec<SpanGroup>,
+}
+
+/// A named list of spans, like spaCy's `SpanGroup`. Spans keep their order and may overlap,
+/// repeat or be empty (`start === end`).
+#[napi(object, object_from_js = false)]
+pub struct SpanGroup {
+    #[napi(ts_type = "SpanGroupKey")]
+    pub key: String,
+    /// spaCy's `SpanGroup.name`, which need not equal the key.
+    pub name: String,
+    /// spaCy's `SpanGroup.attrs`; `{}` when the group has none.
+    // The native code passes JSON text, which the package wrapper parses for every `Document` it
+    // returns (`toObject`, `process`, `processBatch` and `pipe`).
+    #[napi(ts_type = "SpanGroupAttrs")]
+    pub attrs: String,
+    #[napi(ts_type = "Array<Span<SpanLabel | ''>>")]
+    pub spans: Vec<Span>,
 }
 
 /// One token of `Document.tokens`. Offsets index `Document.text`; each `*End` is exclusive and
@@ -74,6 +95,6 @@ pub struct Span {
     #[napi(ts_type = "import('./units.js').TokenIndex")]
     pub end: u32,
     pub label: String,
-    /// spaCy's `Span.id_`, or `''` without one; only entities carry IDs.
+    /// spaCy's `Span.id_`, or `''` without one; entities and span group members carry IDs.
     pub id: String,
 }

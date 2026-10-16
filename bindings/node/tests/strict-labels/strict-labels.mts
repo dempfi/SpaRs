@@ -1,12 +1,14 @@
 // Compiled separately (tsconfig.json here) because augmentation is global to a compilation. The
 // package name resolves to the local declarations, as it does for an installed package.
-import type { DependencyLabel, Document, EntityInput, EntityLabel, EntityMatch, EntityPattern, EntityRuler, RulerPattern, FineGrainedTag, ModelName, ModelNames, Token } from '@spars/node';
+import type { DependencyLabel, Document, EntityInput, EntityLabel, EntityMatch, EntityPattern, EntityRuler, RulerPattern, FineGrainedTag, ModelName, ModelNames, SpanGroupKey, SpanGroupKeys, SpanInput, SpanLabel, Token } from '@spars/node';
 
 declare module '@spars/node' {
   interface EntityLabels { PRODUCT_CODE: true }
   interface FineGrainedTags { CUSTOM_TAG: true }
   interface ModelNames { my_model: true }
-  interface StrictLabelSets { entity: true; tag: true; dependency: true }
+  interface SpanLabels { CANDIDATE: true }
+  interface SpanGroupKeys { candidates: true }
+  interface StrictLabelSets { entity: true; tag: true; dependency: true; span: true }
 }
 
 type Assert<T extends true> = T;
@@ -28,6 +30,16 @@ export type Contracts = [
   Assert<Equal<'OTHER_TAG' extends FineGrainedTag ? true : false, false>>,
   Assert<Equal<'nsubj' extends DependencyLabel ? true : false, true>>,
   Assert<Equal<'custom_dep' extends DependencyLabel ? true : false, false>>,
+  // Span labels include registered span and entity labels; strict sets reject others.
+  Assert<Equal<'CANDIDATE' extends SpanLabel ? true : false, true>>,
+  Assert<Equal<'PRODUCT_CODE' extends SpanLabel ? true : false, true>>,
+  Assert<Equal<'UNREGISTERED' extends SpanLabel ? true : false, false>>,
+  Assert<Equal<string extends NonNullable<SpanInput['label']> ? true : false, false>>,
+  Assert<Equal<string extends NonNullable<Document['spanGroups']>[number]['spans'][number]['label'] ? true : false, false>>,
+  // Span group keys autocomplete registered keys but accept any key.
+  Assert<Equal<'candidates' extends keyof SpanGroupKeys ? true : false, true>>,
+  Assert<Equal<'other' extends SpanGroupKey ? true : false, true>>,
+  Assert<Equal<'candidates' extends SpanGroupKey ? true : false, true>>,
   // Model names autocomplete registered names but always accept a path.
   Assert<Equal<'my_model' extends keyof ModelNames ? true : false, true>>,
   Assert<Equal<'./models/custom' extends ModelName ? true : false, true>>,

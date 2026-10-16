@@ -45,6 +45,20 @@ export interface DependencyLabels {
   predet: true; prep: true; prt: true; punct: true; quantmod: true; relcl: true; xcomp: true
 }
 
+/**
+ * Labels of span group members. They include the entity labels, and you can add your own like
+ * {@link EntityLabels}; `StrictLabelSets` uses `span` for them.
+ */
+export interface SpanLabels extends EntityLabels {}
+
+/**
+ * Span group keys spaCy's components write by default: `ruler` for `span_ruler` and `sc` for
+ * `spancat` and `span_finder`. Register your own keys like {@link EntityLabels}.
+ */
+export interface SpanGroupKeys {
+  ruler: true; sc: true
+}
+
 /** Official pipelines that `downloadModel` can install. */
 export type OfficialModelName = 'en_core_web_sm' | 'en_core_web_md' | 'en_core_web_lg'
 
@@ -76,6 +90,10 @@ export type EntityLabel = LabelSet<EntityLabels, 'entity'>
 export type FineGrainedTag = LabelSet<FineGrainedTags, 'tag'>
 /** A registered dependency label, or any string unless `StrictLabelSets` has `dependency`. */
 export type DependencyLabel = LabelSet<DependencyLabels, 'dependency'>
+/** A registered span label, or any string unless `StrictLabelSets` has `span`. */
+export type SpanLabel = LabelSet<SpanLabels, 'span'>
+/** A registered span group key, or any other key. */
+export type SpanGroupKey = RegisteredLabel<SpanGroupKeys> | (string & {})
 /** A registered model name, or any other name or directory path. */
 export type ModelName = RegisteredLabel<ModelNames> | (string & {})
 

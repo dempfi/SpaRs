@@ -1,5 +1,5 @@
 use crate::errors::{number, Result};
-use crate::output::{Document, Span, Token};
+use crate::output::{Document, Span, SpanGroup, Token};
 
 pub fn document(doc: &spars::Doc) -> Result<Document> {
     // Walk text once in order. Counting each token's prefix would be quadratic.
@@ -48,6 +48,21 @@ pub fn document(doc: &spars::Doc) -> Result<Document> {
         entities: spans(doc.entities())?,
         sentences: spans(doc.sentences())?,
         noun_chunks: spans(doc.noun_chunks())?,
+        // Attrs are JSON text, which the package wrapper of `NativeDocument.toObject` parses.
+        // Inference output never has groups, since no pipeline stage adds them; a stage that did
+        // would need the same parsing on `Model.process` output.
+        span_groups: doc
+            .span_groups()
+            .iter()
+            .map(|(key, group)| {
+                Ok(SpanGroup {
+                    key: key.to_owned(),
+                    name: group.name.clone(),
+                    attrs: serde_json::to_string(&group.attrs).map_err(spars::Error::from)?,
+                    spans: spans(Some(&group.spans))?.unwrap_or_default(),
+                })
+            })
+            .collect::<Result<_>>()?,
     })
 }
 

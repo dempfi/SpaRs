@@ -15,6 +15,7 @@ spars-model = { path = "../../crates/spars-model" }
 spars = { package = "spars-nlp", path = "../../crates/spars" }
 napi = { version = "3", default-features = false, features = ["napi8"] }
 napi-derive = "3"
+serde_json = "1"
 
 [build-dependencies]
 napi-build = "2"
