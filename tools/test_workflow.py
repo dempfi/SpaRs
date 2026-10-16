@@ -36,7 +36,11 @@ class WorkflowTests(unittest.TestCase):
     def test_platform_checks_keep_required_coverage_without_full_duplication(self) -> None:
         workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/ci.yml').read_text()
         job = workflow.split('  reference-and-rust:', 1)[1].split('  native-installation:', 1)[0]
-        self.assertIn('os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]', job)
+        # The matrix comes from .github/scripts/ci-changes.cjs, whose tests require the full
+        # matrix for native changes.
+        self.assertIn('os: ${{ fromJSON(needs.changes.outputs.os) }}', job)
+        script = (Path(__file__).resolve().parent.parent / '.github/scripts/ci-changes.cjs').read_text()
+        self.assertIn("const FULL_MATRIX = ['ubuntu-latest', 'ubuntu-24.04-arm', 'macos-latest'];", script)
         self.assertIn('name: reference-and-rust (${{ matrix.os }})', job)
         self.assertNotIn('continue-on-error:', job)
         self.assertIn('test "$(uname -m)" = arm64', job)

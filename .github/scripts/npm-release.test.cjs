@@ -99,7 +99,8 @@ test('Linux ARM64 is built, tested, and packaged on a native runner', async()=>{
   assert.deepEqual(new Set(manifest.napi.targets),new Set(targets.map(target=>target.triple)));
   assert.ok(release.jobs.build.strategy.matrix.include.some(row=>row.os==='ubuntu-24.04-arm' && row.target==='linux-arm64-gnu'));
   assert.ok(release.jobs.smoke.strategy.matrix.include.map(row=>row.os).includes('ubuntu-24.04-arm'));
-  assert.ok(ci.jobs['reference-and-rust'].strategy.matrix.os.includes('ubuntu-24.04-arm'));
+  assert.equal(ci.jobs['reference-and-rust'].strategy.matrix.os,'${{ fromJSON(needs.changes.outputs.os) }}');
+  assert.ok(require('./ci-changes.cjs').classify(['bindings/node/src/lib.rs']).os.includes('ubuntu-24.04-arm'));
   const acceptance=ci.jobs['reference-and-rust'].steps.find(step=>step.name==='Run Linux acceptance');
   assert.equal(acceptance.if,"runner.os == 'Linux'");
   assert.match(acceptance.run,/tools\/verify\.py --model-exports-only/);

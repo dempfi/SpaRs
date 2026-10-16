@@ -1,6 +1,25 @@
 name: npm release
 on:
+  # Rebuild the npm packages on pull requests only when their inputs change. This workflow is not
+  # a required check, so skipping it does not block merging.
   pull_request:
+    paths:
+      - bindings/node/**
+      - crates/**
+      - tools/release/**
+      - models/**
+      - fixtures/**
+      - licenses/**
+      - Cargo.toml
+      - Cargo.lock
+      - .cargo/**
+      - .nvmrc
+      - LICENSE
+      - THIRD_PARTY_NOTICES.md
+      - version.txt
+      - .release-please-manifest.json
+      - .github/workflows/npm-release.yml
+      - .github/scripts/npm-release.cjs
   workflow_dispatch:
     inputs:
       tag:
