@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/tareksanger/SpaRs/compare/v0.4.0...v0.4.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **deps:** bump handlebars to 4.7.10 in development tools ([#126](https://github.com/tareksanger/SpaRs/issues/126)) ([b6b4dbc](https://github.com/tareksanger/SpaRs/commit/b6b4dbcd01ffc82eaa161d686d0bc1c8d867a8bf))
+* **node:** support Node.js 22 ([#127](https://github.com/tareksanger/SpaRs/issues/127)) ([233bc19](https://github.com/tareksanger/SpaRs/commit/233bc19ee23e351bb81557250c90909ba9c333dc))
+
 ## [0.4.0](https://github.com/tareksanger/SpaRs/compare/v0.3.0...v0.4.0) (2026-10-16)
 
 

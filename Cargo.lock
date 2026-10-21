@@ -812,7 +812,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "spars-model"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "fs2",
  "libc",
@@ -829,7 +829,7 @@ dependencies = [
 
 [[package]]
 name = "spars-nlp"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "fancy-regex",
  "matrixmultiply",
@@ -842,7 +842,7 @@ dependencies = [
 
 [[package]]
 name = "spars-node"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "napi",
  "napi-build",
