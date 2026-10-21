@@ -165,7 +165,7 @@ export function stageRelease(input: string, output: string, sha: string, version
   }
   if (!first || !previous) throw new Error('No artifacts');
   create(output);
-  const base = {version:first.version,license:'MIT',repository,engines:{node:'>=24'},publishConfig:{access:'public',registry:'https://registry.npmjs.org/'}};
+  const base = {version:first.version,license:'MIT',repository,engines:{node:'>=22'},publishConfig:{access:'public',registry:'https://registry.npmjs.org/'}};
   const main = join(output,'main');
   mkdirSync(join(main,'bin'),{recursive:true});
   for (const file of commonFiles) cpSync(join(previous,file),join(main,file === 'spars.mjs' ? 'bin/spars.mjs' : file));

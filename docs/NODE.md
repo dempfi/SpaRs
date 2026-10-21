@@ -4,7 +4,7 @@ The separate `spars-node` crate exposes native Rust inference to Node.js through
 
 ## Build and install a model
 
-Use Node.js 24 or newer, npm, and Rust 1.88 or newer. Run these commands from the repository root:
+Use Node.js 22 or newer, npm, and Rust 1.88 or newer. Run these commands from the repository root:
 
 ```sh
 npm --prefix bindings/node ci --ignore-scripts --no-audit --no-fund

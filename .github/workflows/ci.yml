@@ -107,6 +107,15 @@ jobs:
       - name: Run Linux acceptance
         if: runner.os == 'Linux'
         run: .venv/bin/python tools/verify.py --model-exports-only --report target/reports/verification-ci.json
+      # Rerun the binding tests against the addon and models built above on the oldest Node
+      # release that `engines.node` in bindings/node/package.json allows. Raise them together.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: runner.os == 'Linux'
+        with:
+          node-version: 22
+      - name: Test the Node binding on the oldest supported Node
+        if: runner.os == 'Linux'
+        run: npm --prefix bindings/node test
       - name: Regenerate canonical model references
         if: runner.os == 'macOS'
         run: .venv/bin/python tools/check_models.py
