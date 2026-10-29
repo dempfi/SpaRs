@@ -318,8 +318,10 @@ pub(crate) struct CompiledConditions {
 }
 
 // Pattern items are scanned for every token; keep them two per 64-byte cache line.
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<CompiledConditions>() == 32);
 // Constraints are also scanned per token; the flags fit in existing padding.
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<CompiledConstraint>() == 64);
 
 /// Compile one item's conditions. Its `LENGTH` checks are appended to the pattern's

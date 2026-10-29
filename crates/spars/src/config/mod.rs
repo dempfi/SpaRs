@@ -31,6 +31,7 @@ pub(crate) struct Manifest {
     pub capabilities: Option<Capabilities>,
     pub tensors: HashMap<String, TensorSpec>,
     pub tokenizer: TokenizerConfig,
+    #[serde(default)]
     pub vector_keys: HashMap<u64, usize>,
     pub norms: HashMap<u64, String>,
     pub symbols: HashMap<String, u64>,

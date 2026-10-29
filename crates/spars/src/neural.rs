@@ -244,7 +244,11 @@ pub(crate) fn validate(m: &Model) -> Result<()> {
     if vectors.shape.len() != 2 {
         return Err(bad("vectors rank"));
     }
-    if m.vector_keys.values().any(|&r| r >= vectors.shape[0]) {
+    if m.vector_keys
+        .rows
+        .iter()
+        .any(|&r| r as usize >= vectors.shape[0])
+    {
         return Err(bad("vector row out of bounds"));
     }
     let enc = |p: &Encoder| -> Result<usize> {
