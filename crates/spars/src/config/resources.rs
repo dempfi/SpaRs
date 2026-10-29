@@ -11,6 +11,8 @@ pub(crate) struct TokenizerConfig {
     pub faster_heuristics: Option<bool>,
     pub regex_dialect: String,
     pub rules: HashMap<String, Vec<Exception>>,
+    #[serde(default)]
+    pub matcher_patterns: Option<HashMap<String, Vec<Vec<String>>>>,
 }
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

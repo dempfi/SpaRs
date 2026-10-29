@@ -8,7 +8,7 @@ pub(crate) struct Tokenizer {
     infix: Regex,
     url: std::sync::Arc<Regex>,
     rules: HashMap<String, Vec<Exception>>,
-    matcher_patterns: HashMap<String, Vec<Vec<String>>>,
+    pub(crate) matcher_patterns: HashMap<String, Vec<Vec<String>>>,
 }
 impl Tokenizer {
     /// The compiled URL pattern, shared with the model's lexicon for `LIKE_URL`.
@@ -36,6 +36,10 @@ impl Tokenizer {
             url: std::sync::Arc::new(Regex::new(&v.url)?),
             rules,
         };
+        if let Some(patterns) = &v.matcher_patterns {
+            tokenizer.matcher_patterns = patterns.clone();
+            return Ok(tokenizer);
+        }
         // spaCy builds phrase patterns with exception handling disabled.
         // Matching the same text with different token boundaries is insufficient.
         for word in tokenizer.rules.keys() {

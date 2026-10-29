@@ -196,6 +196,9 @@ impl Model {
             .cloned()
             .unwrap_or_else(|| self.lower(s))
     }
+    pub fn tokenizer_matcher_patterns(&self) -> &HashMap<String, Vec<Vec<String>>> {
+        &self.tokenizer.matcher_patterns
+    }
     pub fn vector(&self, word: &str) -> Option<&[f32]> {
         let row = self.vector_keys.get(self.string_id(word))?;
         let t = &self.tensors["vectors"];
